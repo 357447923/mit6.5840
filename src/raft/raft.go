@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"strconv"
 
 	//	"bytes"
@@ -126,7 +125,7 @@ func (rf *Raft) changeRole(role Role) {
 			rf.currentTerm++
 			rf.voteFor = rf.id
 			rf.leader = VoteForInvalid
-			fmt.Printf("id=%d vote to itself, term=%d, time=%d\n", rf.id, rf.currentTerm, time.Now().UnixMilli())
+			DPrintf("id=%d vote to itself, term=%d, time=%d\n", rf.id, rf.currentTerm, time.Now().UnixMilli())
 			rf.resetElectTimeOut()
 		}
 	case LEADER:
@@ -139,17 +138,14 @@ func (rf *Raft) changeRole(role Role) {
 			}
 			rf.matchIndex = make([]int, len(rf.peers))
 			rf.matchIndex[rf.me] = logIndex
-			if !rf.electionTimer.Stop() {
-				<-rf.electionTimer.C
-				rf.electionTimer.Stop()
-			}
+			rf.electionTimer.Stop()
 			rf.resetHeartBeatTimer()
 			rf.registerHandleHeartBeat()
 		}
 	case FOLLOWER:
 		{
 			if rf.role == LEADER {
-				fmt.Printf("id=%d change to follower from leader\n", rf.id)
+				DPrintf("id=%d change to follower from leader\n", rf.id)
 			}
 			rf.role = FOLLOWER
 			rf.resetWaitHeartBeatTimer()
@@ -248,7 +244,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.currentTerm {
 		// 可能是leader断网之后，发现其他节点正在选举
 		if rf.role == LEADER {
-			fmt.Printf("rf.currentTerm=%d, args.Term=%d\n", rf.currentTerm, args.Term)
+			DPrintf("rf.currentTerm=%d, args.Term=%d\n", rf.currentTerm, args.Term)
 			rf.changeRole(FOLLOWER)
 		}
 		rf.resetElectTimeOut()
@@ -260,7 +256,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.currentTerm = args.Term
 			reply.CurrTerm = args.Term
 			reply.VoteGranted = true
-			fmt.Printf("id=%d vote to id=%d, term=%d\n", rf.id, rf.voteFor, rf.currentTerm)
+			DPrintf("id=%d vote to id=%d, term=%d\n", rf.id, rf.voteFor, rf.currentTerm)
 			return
 		}
 		log := rf.log[len(rf.log)-1]
@@ -268,7 +264,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.CurrTerm = args.Term
 			reply.VoteGranted = true
 			rf.voteFor = args.CandidateId
-			fmt.Printf("id=%d vote to id=%d, term=%d\n", rf.id, rf.voteFor, rf.currentTerm)
+			DPrintf("id=%d vote to id=%d, term=%d\n", rf.id, rf.voteFor, rf.currentTerm)
 		}
 
 	}
@@ -345,7 +341,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		}
 		go func(ch *chan bool, index int) {
 			var reply RequestVoteReply
-			fmt.Printf("id=%d send to id=%d\n", rf.id, index)
+			DPrintf("id=%d send to id=%d\n", rf.id, index)
 			end := false
 			for !end {
 				end = rf.sendRequestVote(index, &args, &reply)
@@ -382,14 +378,14 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 
 	if voteCount <= len(rf.peers)/2 {
 		rf.changeRole(FOLLOWER)
-		fmt.Printf("id=%d get vote less than 1/2 votes. grantedCount=%d\n", rf.id, voteCount)
+		DPrintf("id=%d get vote less than 1/2 votes. grantedCount=%d\n", rf.id, voteCount)
 		return false
 	}
 
 	// 保证当前任期与选举后任期一致, 保证在期间没有收到过新的leader的心跳
 	if rf.currentTerm == args.Term && rf.leader == VoteForInvalid && rf.role == CANDIDATE {
 		rf.changeRole(LEADER)
-		fmt.Printf("id=%d become leader\n", rf.id)
+		DPrintf("id=%d become leader\n", rf.id)
 		rf.SendHeartBeatAsync()
 	} else {
 		rf.changeRole(FOLLOWER)
@@ -429,7 +425,7 @@ func (rf *Raft) SendHeartBeat(index int, timeout time.Duration) (bool, AppendEnt
 		LeaderCommit: rf.commitIndex,
 	}
 	var reply AppendEntriesReply
-	success := rf.peers[index].CallWithTimeout("Raft.AppendEntries", &args, &reply, timeout)
+	success := rf.peers[index].Call("Raft.AppendEntries", &args, &reply)
 	return success, reply
 }
 
@@ -448,7 +444,7 @@ func (rf *Raft) SendHeartBeatAsync() {
 		}
 		go func(peer *labrpc.ClientEnd, index int) {
 			var reply AppendEntriesReply
-			fmt.Printf("leader=%d send heart beat to %d\n", rf.id, index)
+			DPrintf("leader=%d send heart beat to %d\n", rf.id, index)
 			peer.Call("Raft.AppendEntries", &args, &reply)
 		}(peer, index)
 	}
@@ -468,7 +464,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leader = args.LeaderId
 		reply.Term = rf.currentTerm
 		reply.Success = true
-		fmt.Printf("heart beat handle success, leader=%d, me=%d, term=%d, time=%d\n", rf.leader, rf.id, rf.currentTerm, time.Now().UnixMilli())
+		DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, time=%d\n", rf.leader, rf.id, rf.currentTerm, time.Now().UnixMilli())
 		return
 	}
 
@@ -587,23 +583,23 @@ func (rf *Raft) ticker() {
 		select {
 		case <-rf.electionTimer.C:
 			{
-				fmt.Printf("选举超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
+				DPrintf("选举超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
 				success = rf.startElect(false)
 			}
 		case <-rf.waitHeartBeatTimer.C:
 			{
 				if rf.role == FOLLOWER {
 					rf.leader = VoteForInvalid
-					fmt.Printf("心跳超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
+					DPrintf("心跳超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
 					success = rf.startElect(true)
 				}
 			}
 		}
 
 		if success {
-			fmt.Printf("id=%d success to elect leader\n", rf.id)
+			DPrintf("id=%d success to elect leader\n", rf.id)
 		}
-		fmt.Printf("id=%d finish to elect leader\n", rf.id)
+		DPrintf("id=%d finish to elect leader\n", rf.id)
 	}
 }
 
@@ -650,7 +646,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.heartBeatTimer[i] = time.NewTimer(OneHeartBeatLag * time.Millisecond)
 	}
 	// Your initialization code here (2A, 2B, 2C).
-	fmt.Println("make an entry " + "id=" + strconv.Itoa(me))
+	DPrintf("make an entry id=%s", strconv.Itoa(me))
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
