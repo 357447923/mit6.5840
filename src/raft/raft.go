@@ -60,18 +60,14 @@ const (
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
-	CommandIndex int
+	CommandIndex int // 在哪一任上收到消息
+	ReceiveTerm  int
 
 	// For 2D:
 	SnapshotValid bool
 	Snapshot      []byte
 	SnapshotTerm  int
 	SnapshotIndex int
-}
-
-type LogMsg struct {
-	ApplyMsg    ApplyMsg
-	ReceiveTerm int // 在哪一个任期上收到了该日志
 }
 
 // A Go object implementing a single Raft peer.
@@ -95,9 +91,9 @@ type Raft struct {
 	waitHeartBeatTimer *time.Timer
 
 	// exists stably in all server as follows（持久数据）
-	currentTerm int      // last Term of server knowing
-	voteFor     int      // 当前任期内收到选票的Candidate id（没有就为-1）
-	log         []LogMsg // 每个条目包含状态机的要执行命令和从 Leader 处收到时的任期号
+	currentTerm int        // last Term of server knowing
+	voteFor     int        // 当前任期内收到选票的Candidate id（没有就为-1）
+	log         []ApplyMsg // 每个条目包含状态机的要执行命令和从 Leader 处收到时的任期号
 
 	// exists unstably in all server as follows(非持久数据)
 	commitIndex int // 已知的被提交的最大日志条目的索引值（从0开始递增）
@@ -131,7 +127,7 @@ func (rf *Raft) changeRole(role Role) {
 	case LEADER:
 		{
 			rf.role = LEADER
-			_, logIndex := rf.lastLogTermIndex()
+			logIndex := rf.lastLogIndex()
 			rf.nextIndex = make([]int, len(rf.peers))
 			for i := range rf.nextIndex {
 				rf.nextIndex[i] = logIndex + 1
@@ -260,7 +256,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			return
 		}
 		log := rf.log[len(rf.log)-1]
-		if args.PrevLogTerm >= log.ReceiveTerm && args.PrevLogIndex >= log.ApplyMsg.CommandIndex {
+		if args.PrevLogTerm >= log.ReceiveTerm && args.PrevLogIndex >= log.CommandIndex {
 			reply.CurrTerm = args.Term
 			reply.VoteGranted = true
 			rf.voteFor = args.CandidateId
@@ -302,11 +298,30 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) lastLogIndex() int {
+	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
+	if len(rf.log) == 0 {
+		return -1
+	} else {
+		return len(rf.log) - 1
+	}
+}
+
+func (rf *Raft) lastLogTerm() int {
+	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
+	if len(rf.log) == 0 {
+		return -1
+	} else {
+		return rf.log[len(rf.log)-1].ReceiveTerm
+	}
+}
+
 func (rf *Raft) lastLogTermIndex() (prevLogTerm int, prevLogIndex int) {
 	// 集群刚启动时就是没有日志的
+	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
 	if len(rf.log) == 0 {
-		prevLogIndex = 0
-		prevLogTerm = 0
+		prevLogIndex = -1
+		prevLogTerm = -1
 	} else {
 		prevLogIndex = len(rf.log) - 1
 		prevLogTerm = rf.log[prevLogIndex].ReceiveTerm
@@ -394,12 +409,12 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 }
 
 type AppendEntriesArgs struct {
-	Term         int      // 任期号
-	LeaderId     int      // Leader 的 id，为了其他服务器能重定向到客户端
-	PrevLogIndex int      // 最新日志的之前的索引值
-	PrevLogTerm  int      // 最新日志之前的日志的 Leader 任期号
-	Entries      []LogMsg // 将要存储的日志条目，为了效率有时会超过一条。表示heartbeat时为空
-	LeaderCommit int      // leader提交的日志条目索引值
+	Term         int        // 任期号
+	LeaderId     int        // Leader 的 id，为了其他服务器能重定向到客户端
+	PrevLogIndex int        // 最新日志的之前的索引值
+	PrevLogTerm  int        // 最新日志之前的日志的 Leader 任期号
+	Entries      []ApplyMsg // 将要存储的日志条目，为了效率有时会超过一条。表示heartbeat时为空
+	LeaderCommit int        // leader提交的日志条目索引值
 }
 
 type AppendEntriesReply struct {
@@ -415,69 +430,106 @@ func min(a int, b int) int {
 	}
 }
 
-func (rf *Raft) SendHeartBeat(index int, timeout time.Duration) (bool, AppendEntriesReply) {
+func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
+	matchIndex := rf.matchIndex[server]
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
 		LeaderId:     rf.id,
-		PrevLogIndex: -1,
-		PrevLogTerm:  -1,
-		Entries:      nil,
 		LeaderCommit: rf.commitIndex,
 	}
+	// TODO 当做到快照的时候需要修改
+	if rf.log == nil || len(rf.log) == 0 {
+		args.Entries = nil
+		args.PrevLogTerm, args.PrevLogIndex = -1, -1
+	} else if matchIndex >= rf.log[len(rf.log)-1].CommandIndex {
+		prevCommand := rf.log[matchIndex]
+		args.PrevLogIndex = prevCommand.CommandIndex
+		args.PrevLogTerm = prevCommand.ReceiveTerm
+		args.Entries = rf.log[matchIndex+1:]
+	} else {
+		args.Entries = nil
+		args.PrevLogTerm, args.PrevLogIndex = rf.lastLogTermIndex()
+	}
+	return args
+}
+
+// 第一个返回值代表RPC是否成功，第二个代表RPC回复
+func (rf *Raft) SendAppendEntries(server int) (bool, AppendEntriesReply) {
+	args := rf.genAppendEntriesArgs(server)
 	var reply AppendEntriesReply
-	success := rf.peers[index].Call("Raft.AppendEntries", &args, &reply)
+	success := rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
 	return success, reply
 }
 
 func (rf *Raft) SendHeartBeatAsync() {
-	args := AppendEntriesArgs{
-		Term:         rf.currentTerm,
-		LeaderId:     rf.id,
-		PrevLogIndex: -1,
-		PrevLogTerm:  -1,
-		Entries:      nil,
-		LeaderCommit: rf.commitIndex,
-	}
-	for index, peer := range rf.peers {
+	for index := range rf.peers {
 		if index == rf.me {
 			continue
 		}
-		go func(peer *labrpc.ClientEnd, index int) {
-			var reply AppendEntriesReply
+		go func(index int) {
 			DPrintf("leader=%d send heart beat to %d\n", rf.id, index)
-			peer.Call("Raft.AppendEntries", &args, &reply)
-		}(peer, index)
+			for {
+				success, reply := rf.SendAppendEntries(index)
+				// 对各个节点做一些同步的操作，并且可以更新matchIndex，其实这个也是起到发心跳的作用
+				if success {
+					rf.heartBeatTimer[index].Stop()
+					rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
+					if reply.Success {
+						break
+					} else if reply.Term < rf.currentTerm {
+						rf.changeRole(FOLLOWER)
+						break
+					} else {
+						rf.matchIndex[index]--
+					}
+				}
+			}
+		}(index)
+	}
+}
+
+// 提交日志
+func (rf *Raft) updateCommitEntries(leaderCommit int) {
+	// 获取最后一条日志的索引
+	lastIndex := rf.lastLogIndex()
+	originCommitIndex := rf.commitIndex
+	rf.commitIndex = min(leaderCommit, lastIndex)
+	for i := originCommitIndex + 1; i < rf.commitIndex; i++ {
+		rf.applyCh <- rf.log[i]
 	}
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	// 处理心跳
-	if args.Entries == nil {
-		if args.Term < rf.currentTerm {
-			reply.Success = false
-			reply.Term = rf.currentTerm
-			return
-		}
-		rf.electionTimer.Stop()
-		rf.changeRole(FOLLOWER)
-		rf.currentTerm = args.Term
-		rf.leader = args.LeaderId
-		reply.Term = rf.currentTerm
-		reply.Success = true
-		DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, time=%d\n", rf.leader, rf.id, rf.currentTerm, time.Now().UnixMilli())
-		return
-	}
-
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
-
+	// 处理心跳
+	if args.Entries == nil {
+		rf.electionTimer.Stop()
+		rf.changeRole(FOLLOWER)
+		rf.currentTerm = args.Term
+		rf.leader = args.LeaderId
+		reply.Term = rf.currentTerm
+		term, logIndex := rf.lastLogTermIndex()
+		// 日志不同，需要做同步操作
+		if args.PrevLogTerm != term || args.PrevLogIndex != logIndex {
+			reply.Success = false
+			DPrintf("logs are diff from leader, syncing\n")
+			return
+		}
+		reply.Success = true
+		// 更新已提交的条目
+		rf.updateCommitEntries(args.LeaderCommit)
+		DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, time=%d\n", rf.leader, rf.id, rf.currentTerm, time.Now().UnixMilli())
+		return
+	}
+	DPrintf("follower handle logs\n")
 	// 追加日志
 	prevLogIndex := args.PrevLogIndex
 	msg := rf.log[len(rf.log)]
-	if msg.ApplyMsg.CommandIndex < prevLogIndex {
+	if msg.CommandIndex < prevLogIndex {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
@@ -485,7 +537,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	index := len(rf.log) - 1
 	for ; index >= 0; index-- {
 		logMsg := rf.log[index]
-		if logMsg.ApplyMsg.CommandIndex == prevLogIndex {
+		if logMsg.CommandIndex == prevLogIndex {
 			break
 		}
 	}
@@ -501,7 +553,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else {
 		rf.log = rf.log[:index+1]
 		rf.log = append(rf.log, args.Entries...)
-		rf.commitIndex = min(args.LeaderCommit, rf.log[len(rf.log)-1].ApplyMsg.CommandIndex)
+		// 更新日志提交信息
+		rf.updateCommitEntries(args.LeaderCommit)
 		reply.Term = rf.currentTerm
 		reply.Success = true
 	}
@@ -523,10 +576,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := rf.role == LEADER
 	rf.voteFor = VoteForInvalid
 	// Your code here (2B).
-
+	if isLeader {
+		index = rf.lastLogIndex()
+		index++
+		rf.log = append(rf.log, ApplyMsg{
+			ReceiveTerm:  rf.currentTerm,
+			Command:      command,
+			CommandIndex: index,
+		})
+		rf.matchIndex[rf.me] = index
+		rf.persist()
+	}
 	return index, term, isLeader
 }
 
@@ -559,18 +622,42 @@ func (rf *Raft) registerHandleHeartBeat() {
 				select {
 				case <-rf.heartBeatTimer[index].C:
 					{
-						success, heartBeatReply := rf.SendHeartBeat(index, OneHeartBeatLag*time.Millisecond)
-						if success {
-							if !heartBeatReply.Success && heartBeatReply.Term > rf.currentTerm {
+						// TODO 考虑如何标志数据为已提交，或者说如何才能知道是否有半数以上节点接收到了数据
+						for {
+							success, heartBeatReply := rf.SendAppendEntries(index)
+							rf.heartBeatTimer[index].Stop()
+							rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
+							if !success || heartBeatReply.Success {
+								break
+							} else if heartBeatReply.Term > rf.currentTerm {
 								rf.changeRole(FOLLOWER)
+								break
+							} else {
+								DPrintf("reducing peer%d's match index from %d to %d\n", index, rf.matchIndex[index], rf.matchIndex[index]+1)
+								rf.matchIndex[index]--
 							}
 						}
-						rf.heartBeatTimer[index].Stop()
-						rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
 					}
 				}
 			}
 		}(i)
+	}
+}
+
+func (rf *Raft) updateCommit() {
+	if rf.lastLogIndex() > rf.commitIndex {
+		for i := rf.commitIndex + 1; i <= rf.lastLogIndex(); i++ {
+			receive := 0
+			for matchIndex := range rf.matchIndex {
+				if matchIndex >= i {
+					receive++
+				}
+			}
+			if receive <= len(rf.peers)/2 {
+				break
+			}
+			rf.commitIndex++
+		}
 	}
 }
 
@@ -637,7 +724,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.leader = VoteForInvalid
 	rf.voteFor = -1
 	rf.id = me
-	rf.log = []LogMsg{}
+	rf.log = []ApplyMsg{}
 	rf.applyCh = applyCh
 	rf.waitHeartBeatTimer = time.NewTimer(time.Duration(HeartBeatTimeOut+rand.Int63()%100) * time.Millisecond)
 	rf.electionTimer = time.NewTimer(randomElectTimeOut())
