@@ -569,6 +569,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			if rf != nil {
 				index1, _, ok := rf.Start(cmd)
 				if ok {
+					DPrintf("send cmd to %d, index=%d\n", rf.id, index1)
 					index = index1
 					break
 				}
@@ -581,6 +582,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				DPrintf("对于index=%d日志, 有%d个节点已经达成共识, 一共有%d个节点\n", index, nd, expectedServers)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
