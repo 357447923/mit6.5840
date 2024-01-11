@@ -136,8 +136,7 @@ func TestBasicAgree2B(t *testing.T) {
 	cfg.begin("Test (2B): basic agreement")
 
 	iters := 3
-	// TODO 这里要把index改回1
-	for index := 0; index < iters+1; index++ {
+	for index := 1; index < iters+1; index++ {
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
@@ -242,7 +241,7 @@ func TestLeaderFailure2B(t *testing.T) {
 	// disconnect the first leader.
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
-
+	DPrintf("leader=%d disconnect\n", leader1)
 	// the remaining followers should elect
 	// a new leader.
 	cfg.one(102, servers-1, false)
@@ -252,7 +251,7 @@ func TestLeaderFailure2B(t *testing.T) {
 	// disconnect the new leader.
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
-
+	DPrintf("leader=%d disconnect\n", leader2)
 	// submit a command to each server.
 	for i := 0; i < servers; i++ {
 		cfg.rafts[i].Start(104)

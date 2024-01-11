@@ -46,7 +46,8 @@ const (
 )
 
 const (
-	LogFile = "./raft_test"
+	EmptyCmdIdx  = 0
+	EmptyCmdTerm = 0
 )
 
 type Role int
@@ -94,11 +95,11 @@ type Raft struct {
 	// exists stably in all server as follows（持久数据）
 	currentTerm int        // last Term of server knowing
 	voteFor     int        // 当前任期内收到选票的Candidate id（没有就为-1）
-	log         []ApplyMsg // 每个条目包含状态机的要执行命令和从 Leader 处收到时的任期号
+	log         []ApplyMsg // 每个条目包含状态机的要执行命令和从 Leader 处收到时的任期号, 0这个位置可能要丢弃
 
 	// exists unstably in all server as follows(非持久数据)
 	commitIndex int // 已知的被提交的最大日志条目的索引值（从0开始递增）
-	lastApplied int // 被状态机执行的最大日志条目的索引值（从-1开始递增）
+	lastApplied int // 被状态机执行的最大日志条目的索引值（从0开始递增）
 
 	// exists unstably in leader server as follows(非持久数据)
 	nextIndex  []int // 对于每一个服务器，记录需要发给它的下一个日志条目的索引（初始化为 Leader 上一条日志的索引值+1）
@@ -129,6 +130,7 @@ func (rf *Raft) changeRole(role Role) {
 		{
 			rf.role = LEADER
 			logIndex := rf.lastLogIndex()
+			DPrintf("leader=%d's lastLogIdx=%d, log=%v\n", rf.id, logIndex, rf.log)
 			rf.nextIndex = make([]int, len(rf.peers))
 			for i := range rf.nextIndex {
 				rf.nextIndex[i] = logIndex + 1
@@ -137,13 +139,13 @@ func (rf *Raft) changeRole(role Role) {
 			for i := range rf.matchIndex {
 				rf.matchIndex[i] = logIndex
 			}
+			// 注册commit更新任务
 			rf.commitUpdateTimer = time.NewTimer(300 * time.Millisecond)
 			go func() {
 				for rf.role == LEADER {
 					select {
 					case <-rf.commitUpdateTimer.C:
 						{
-							DPrintf("检查并刷新commit\n")
 							rf.updateCommit()
 						}
 					}
@@ -318,16 +320,16 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) lastLogIndex() int {
 	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
 	if len(rf.log) == 0 {
-		return -1
+		return EmptyCmdIdx
 	} else {
-		return len(rf.log) - 1
+		return rf.log[len(rf.log)-1].CommandIndex
 	}
 }
 
 func (rf *Raft) lastLogTerm() int {
 	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
 	if len(rf.log) == 0 {
-		return -1
+		return EmptyCmdTerm
 	} else {
 		return rf.log[len(rf.log)-1].ReceiveTerm
 	}
@@ -337,11 +339,11 @@ func (rf *Raft) lastLogTermIndex() (prevLogTerm int, prevLogIndex int) {
 	// 集群刚启动时就是没有日志的
 	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
 	if len(rf.log) == 0 {
-		prevLogIndex = -1
-		prevLogTerm = -1
+		prevLogIndex = EmptyCmdIdx
+		prevLogTerm = EmptyCmdTerm
 	} else {
-		prevLogIndex = len(rf.log) - 1
-		prevLogTerm = rf.log[prevLogIndex].ReceiveTerm
+		prevLogIndex = rf.log[len(rf.log)-1].CommandIndex
+		prevLogTerm = rf.log[GenLogIdx(prevLogIndex)].ReceiveTerm
 	}
 	return
 }
@@ -455,19 +457,19 @@ func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
 		LeaderCommit: rf.commitIndex,
 	}
 	// TODO 当做到快照的时候需要修改
-	if rf.log == nil || len(rf.log) == 0 {
+	if len(rf.log) == 0 {
 		args.Entries = nil
-		args.PrevLogTerm, args.PrevLogIndex = -1, -1
+		args.PrevLogTerm, args.PrevLogIndex = EmptyCmdTerm, EmptyCmdIdx
 	} else if len(rf.log) >= rf.nextIndex[server] {
-		if matchIndex == -1 {
-			args.PrevLogIndex = -1
-			args.PrevLogTerm = -1
+		if matchIndex == EmptyCmdIdx {
+			args.PrevLogTerm, args.PrevLogIndex = EmptyCmdTerm, EmptyCmdIdx
 		} else {
-			prevCommand := rf.log[matchIndex]
+			prevCommand := rf.log[GenLogIdx(matchIndex)]
 			args.PrevLogIndex = prevCommand.CommandIndex
 			args.PrevLogTerm = prevCommand.ReceiveTerm
 		}
-		args.Entries = rf.log[rf.nextIndex[server]:]
+		DPrintf("genArgs nextIndex=%d, receiver=%d\n", rf.nextIndex[server], server)
+		args.Entries = rf.log[GenLogIdx(rf.nextIndex[server]):]
 	} else {
 		// 用于同步matchIndex和nextIndex
 		args.Entries = nil
@@ -476,24 +478,31 @@ func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
 	return args
 }
 
-// 第一个返回值代表RPC是否成功，第二个代表RPC回复
-func (rf *Raft) SendAppendEntries(server int) (bool, AppendEntriesReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	args := rf.genAppendEntriesArgs(server)
-	var reply AppendEntriesReply
-	success := rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
-	return success, reply
-}
-
 func (rf *Raft) SendAppend(server int) {
+	stop := time.NewTimer(OneHeartBeatLag * time.Millisecond)
 	for {
 		args := rf.genAppendEntriesArgs(server)
 		var reply AppendEntriesReply
-		success := rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
+		successChan := make(chan bool, 1)
+		success := false
+		go func() {
+			success = rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
+			successChan <- success
+		}()
+		stop.Stop()
+		stop.Reset(OneHeartBeatLag * time.Millisecond)
+		select {
+		case <-stop.C:
+			{
+				break
+			}
+		case <-successChan:
+			break
+		}
 		rf.heartBeatTimer[server].Stop()
 		rf.heartBeatTimer[server].Reset(OneHeartBeatLag * time.Millisecond)
 		if !success {
+			DPrintf("leader=%d send appendEntries RPC to follower=%d fail\n", rf.id, server)
 			break
 		} else if reply.Success {
 			// 成功并且有发送日志，则需要更新matchIndex和nextIndex
@@ -503,15 +512,20 @@ func (rf *Raft) SendAppend(server int) {
 				DPrintf("follower=%d update match index to %d\n", server, rf.matchIndex[server])
 			}
 			break
-		} else if reply.Term < rf.currentTerm {
+			// 有点奇怪，我以为这里应该是收到的回应任期比当前任期大，说明当前节点不是leader，但是似乎不是这样
+			// TODO 看懂他并且写注释
+			// 我先试试看修改成我上面的理解有没有问题，原来的(reply.Term < rf.currentTerm)
+		} else if reply.Term > rf.currentTerm {
 			rf.changeRole(FOLLOWER)
 			break
 		} else {
+			// 日志非共识日志，寻找共识日志
 			rf.nextIndex[server]--
 			rf.matchIndex[server]--
-			if rf.nextIndex[server] == -1 {
-				rf.nextIndex[server] = 0
-				rf.matchIndex[server] = -1
+			// 完全没有共识日志时的停止点
+			if rf.nextIndex[server] == EmptyCmdIdx {
+				rf.nextIndex[server] = EmptyCmdIdx + 1
+				rf.matchIndex[server] = EmptyCmdIdx
 				DPrintf("leader=%d sync match index from follower=%d fail after becoming leader\n", rf.id, server)
 				break
 			}
@@ -526,28 +540,6 @@ func (rf *Raft) SendHeartBeatAsync() {
 		}
 		go func(index int) {
 			DPrintf("leader=%d send heart beat to %d\n", rf.id, index)
-			/*for {
-				success, reply := rf.SendAppendEntries(index)
-				rf.heartBeatTimer[index].Stop()
-				rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
-				// 对各个节点做一些同步的操作，并且可以更新matchIndex，其实这个也是起到发心跳的作用
-				// TODO 缺少了对发送日志成功时的matchIndex和nextIndex的更新
-				if !success || reply.Success {
-					break
-				} else if reply.Term < rf.currentTerm {
-					rf.changeRole(FOLLOWER)
-					break
-				} else {
-					rf.nextIndex[index]--
-					rf.matchIndex[index]--
-					if rf.nextIndex[index] == -1 {
-						rf.nextIndex[index] = 0
-						rf.matchIndex[index] = -1
-						DPrintf("leader=%d sync match index from follower=%d fail after becoming leader\n", rf.id, index)
-						break
-					}
-				}
-			}*/
 			rf.SendAppend(index)
 		}(index)
 	}
@@ -559,24 +551,32 @@ func (rf *Raft) updateCommitEntries(leaderCommit int) {
 	lastIndex := rf.lastLogIndex()
 	originCommitIndex := rf.commitIndex
 	rf.commitIndex = min(leaderCommit, lastIndex)
+	newlyCommit := []int{}
 	if originCommitIndex != rf.commitIndex {
 		DPrintf("is time to refresh commit for follower=%d\n", rf.id)
 	}
 	for i := originCommitIndex + 1; i <= rf.commitIndex; i++ {
-		DPrintf("follower=%d refresh commit success, put log=%v\n", rf.id, rf.log[i])
-		rf.applyCh <- rf.log[i]
+		newlyCommit = append(newlyCommit, i)
+		//DPrintf("follower=%d refresh commit success, put log=%v\n", rf.id, rf.log[GenLogIdx(i)])
+		rf.applyCh <- rf.log[GenLogIdx(i)]
+	}
+	if len(newlyCommit) > 0 {
+		DPrintf("follower=%d refresh commit success, put logIndex=%v\n", rf.id, newlyCommit)
 	}
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	if args.Term < rf.currentTerm {
+		// 由于此处并不是leader发送的心跳，所以不用重置心跳超时定时器
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
 	// 处理心跳
+	DPrintf("args=%v\n", args)
 	if args.Entries == nil {
 		rf.electionTimer.Stop()
+		// 包含了重置心跳超时定时器
 		rf.changeRole(FOLLOWER)
 		rf.currentTerm = args.Term
 		rf.leader = args.LeaderId
@@ -585,7 +585,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 日志不同，需要做同步操作
 		if args.PrevLogTerm != term || args.PrevLogIndex != logIndex {
 			reply.Success = false
-			DPrintf("logs are diff from leader, syncing\n")
+			DPrintf("logs are diff from leader, need to sync\n")
 			return
 		}
 		reply.Success = true
@@ -596,10 +596,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	DPrintf("follower=%d handle logs, args=%v\n", rf.id, args)
+	if len(args.Entries) > 0 {
+		DPrintf("follower=%d handle count=%d\n", rf.id, len(args.Entries))
+	}
 	// TODO 貌似目前此处没有处理成功
 	// TODO 貌似是leader无法判断是否发送的是相同的日志导致的错误
 	if len(rf.log) == 0 {
-		if args.PrevLogTerm == -1 && args.PrevLogIndex == -1 {
+		if args.PrevLogTerm == EmptyCmdTerm && args.PrevLogIndex == EmptyCmdIdx {
 			rf.log = append(rf.log, args.Entries...)
 			reply.Term = rf.currentTerm
 			reply.Success = true
@@ -609,14 +612,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		return
 	}
+	// TODO 似乎日志重复会返回false，解决这个问题
 	// 追加日志
 	prevLogIndex := args.PrevLogIndex
 	msg := rf.log[len(rf.log)-1]
 	if msg.CommandIndex < prevLogIndex {
+		// 这条消息对于当前节点来说过于超前
 		reply.Term = rf.currentTerm
 		reply.Success = false
+		DPrintf("这条消息对于节点%d过于超前\n", rf.id)
 		return
 	}
+	// 寻找index相同的日志，并检查是否为共识日志
 	index := len(rf.log) - 1
 	for ; index >= 0; index-- {
 		logMsg := rf.log[index]
@@ -625,23 +632,28 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if index == -1 {
+		// 找不到共识日志
 		reply.Term = rf.currentTerm
 		reply.Success = false
+		DPrintf("节点%d未找到与leader的共识日志", rf.id)
 		return
 	}
 	logMsg := rf.log[index]
-	if logMsg.ReceiveTerm != args.Term {
+	if logMsg.ReceiveTerm != args.PrevLogTerm {
+		// 非共识日志
 		reply.Term = rf.currentTerm
 		reply.Success = false
 	} else {
-		//rf.log = rf.log[:index+1]
+		// 对非共识日志进行丢弃后再进行追加共识日志
+		rf.log = rf.log[:index+1]
 		rf.log = append(rf.log, args.Entries...)
 		// 更新日志提交信息
 		rf.updateCommitEntries(args.LeaderCommit)
 		reply.Term = rf.currentTerm
 		reply.Success = true
 		DPrintf("follower=%d receive log, firstTerm=%d, firstIndex=%d, lastTerm=%d, lastIndex=%d\n",
-			rf.id, args.Entries[0].ReceiveTerm, args.Entries[0].CommandIndex, args.Entries[len(args.Entries)-1].ReceiveTerm, args.Entries[len(args.Entries)-1].CommandIndex)
+			rf.id, args.Entries[0].ReceiveTerm, args.Entries[0].CommandIndex,
+			args.Entries[len(args.Entries)-1].ReceiveTerm, args.Entries[len(args.Entries)-1].CommandIndex)
 	}
 
 }
@@ -665,6 +677,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.voteFor = VoteForInvalid
 	// Your code here (2B).
 	if isLeader {
+		term = rf.currentTerm
+		rf.mu.Lock()
 		index = rf.lastLogIndex()
 		index++
 		rf.log = append(rf.log, ApplyMsg{
@@ -674,8 +688,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			CommandIndex: index,
 		})
 		rf.matchIndex[rf.me] = index
+		rf.mu.Unlock()
 		rf.persist()
-		DPrintf("leader=%d receive one log\n", rf.id)
+		DPrintf("leader=%d receive one log, logIndex=%d\n", rf.id, index)
 	}
 	return index, term, isLeader
 }
@@ -709,29 +724,6 @@ func (rf *Raft) registerHandleHeartBeat() {
 				select {
 				case <-rf.heartBeatTimer[index].C:
 					{
-						// TODO 考虑如何标志数据为已提交，或者说如何才能知道是否有半数以上节点接收到了数据
-						/*for {
-							success, heartBeatReply := rf.SendAppendEntries(index)
-							rf.heartBeatTimer[index].Stop()
-							rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
-							if !success || heartBeatReply.Success {
-								break
-							} else if heartBeatReply.Term > rf.currentTerm {
-								rf.changeRole(FOLLOWER)
-								break
-							} else {
-								DPrintf("reducing peer%d's match index from %d to %d, success=%v, reply.Success=%v\n",
-									index, rf.matchIndex[index], rf.matchIndex[index]-1, success, heartBeatReply.Success)
-								rf.nextIndex[index]--
-								rf.matchIndex[index]--
-								if rf.nextIndex[index] == -1 {
-									rf.nextIndex[index] = 0
-									rf.matchIndex[index] = -1
-									DPrintf("leader=%d sync log to follower=%d fail\n", rf.id, index)
-									break
-								}
-							}
-						}*/
 						rf.SendAppend(index)
 					}
 				}
@@ -743,6 +735,7 @@ func (rf *Raft) registerHandleHeartBeat() {
 func (rf *Raft) updateCommit() {
 	// TODO 2D做快照后，这里都得修改
 	if rf.lastLogIndex() > rf.commitIndex {
+		newlyCommit := []int{}
 		for i := rf.commitIndex + 1; i <= rf.lastLogIndex(); i++ {
 			receive := 0
 			for _, matchIndex := range rf.matchIndex {
@@ -754,10 +747,13 @@ func (rf *Raft) updateCommit() {
 				DPrintf("leader=%d log=%d未达成共识\n", rf.id, i)
 				break
 			}
-			rf.applyCh <- rf.log[i]
-			DPrintf("leader=%d refresh commit success, receive=%d, put logIndex=%d, rf.matchIndex=%v\n",
-				rf.id, receive, i, rf.matchIndex)
+			rf.applyCh <- rf.log[GenLogIdx(i)]
+			newlyCommit = append(newlyCommit, i)
 			rf.commitIndex++
+		}
+		if len(newlyCommit) > 0 {
+			DPrintf("leader=%d refresh commit success, put logIndex=%v, rf.matchIndex=%v\n",
+				rf.id, newlyCommit, rf.matchIndex)
 		}
 	}
 }
@@ -827,8 +823,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.id = me
 	rf.log = []ApplyMsg{}
 	rf.applyCh = applyCh
-	rf.commitIndex = -1
-	rf.lastApplied = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	rf.waitHeartBeatTimer = time.NewTimer(time.Duration(HeartBeatTimeOut+rand.Int63()%100) * time.Millisecond)
 	rf.electionTimer = time.NewTimer(randomElectTimeOut())
 	rf.heartBeatTimer = make([]*time.Timer, len(peers))
