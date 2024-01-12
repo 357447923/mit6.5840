@@ -1,0 +1,1142 @@
+disconnect(0)
+make an entry id=0
+disconnect(1)
+make an entry id=1
+disconnect(2)
+make an entry id=2
+connect(0)
+connect(1)
+connect(2)
+Test (2A): initial election ...
+选举超时, id=0, time=1705031250271
+id=0 vote to itself, term=1, time=1705031250271
+id=0 send to id=2
+id=0 send to id=1
+id=0 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250272
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250272
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250273
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250273
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250373
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250374
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250475
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250475
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250577
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250577
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250678
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250679
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250780
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250780
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250881
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250881
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031250982
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031250982
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251084
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251084
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251185
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251186
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251287
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251287
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251388
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251389
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251490
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251490
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251591
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251591
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251692
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251693
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251793
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251793
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251894
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251895
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031251996
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031251996
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031252098
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031252099
+  ... Passed --   2.1  3   42   15040    0
+disconnect(0)
+make an entry id=0
+disconnect(1)
+make an entry id=1
+disconnect(2)
+make an entry id=2
+connect(0)
+connect(1)
+connect(2)
+Test (2A): election after network failure ...
+选举超时, id=0, time=1705031252323
+id=0 vote to itself, term=1, time=1705031252323
+id=0 send to id=2
+id=0 send to id=1
+id=0 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031252324
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031252324
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031252324
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031252324
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031252425
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031252426
+heart beat handle success, leader=0, me=2, term=1, myCommit=0, time=1705031252526
+heart beat handle success, leader=0, me=1, term=1, myCommit=0, time=1705031252526
+disconnect(0)
+心跳超时, id=1, time=1705031252638
+id=1 vote to itself, term=2, time=1705031252638
+id=1 send to id=2
+id=1 send to id=0
+心跳超时, id=2, time=1705031252678
+id=2 vote to itself, term=2, time=1705031252679
+id=2 send to id=1
+id=2 send to id=0
+心跳超时, id=1, time=1705031253090
+id=1 vote to itself, term=2, time=1705031253093
+id=1 send to id=2
+id=1 send to id=0
+心跳超时, id=2, time=1705031253082
+id=2 vote to itself, term=2, time=1705031253105
+id=2 send to id=1
+id=2 send to id=0
+id=2 become leader, lastLogIdx=0, leaderCommit=0
+id=2 change to follower from leader
+心跳超时, id=1, time=1705031253805
+id=1 vote to itself, term=3, time=1705031253805
+id=1 send to id=2
+id=1 send to id=0
+id=1 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031253806
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031253806
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031253913
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254020
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254127
+connect(0)
+id=0 change to follower from leader
+heart beat handle success, leader=1, me=0, term=3, myCommit=0, time=1705031254184
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254241
+heart beat handle success, leader=1, me=0, term=3, myCommit=0, time=1705031254285
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254345
+heart beat handle success, leader=1, me=0, term=3, myCommit=0, time=1705031254391
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254451
+heart beat handle success, leader=1, me=0, term=3, myCommit=0, time=1705031254494
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254561
+heart beat handle success, leader=1, me=0, term=3, myCommit=0, time=1705031254599
+disconnect(1)
+disconnect(2)
+heart beat handle success, leader=1, me=2, term=3, myCommit=0, time=1705031254670
+心跳超时, id=0, time=1705031255169
+id=0 vote to itself, term=4, time=1705031255169
+id=0 send to id=2
+id=0 send to id=1
+心跳超时, id=2, time=1705031255183
+id=2 vote to itself, term=4, time=1705031255183
+id=2 send to id=1
+id=2 send to id=0
+connect(2)
+心跳超时, id=2, time=1705031255910
+id=2 vote to itself, term=5, time=1705031255913
+id=2 send to id=1
+id=2 send to id=0
+id=2 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031255914
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031255914
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256020
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256128
+connect(1)
+id=1 change to follower from leader
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256238
+heart beat handle success, leader=2, me=1, term=5, myCommit=0, time=1705031256296
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256346
+heart beat handle success, leader=2, me=1, term=5, myCommit=0, time=1705031256418
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256448
+heart beat handle success, leader=2, me=1, term=5, myCommit=0, time=1705031256526
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256550
+heart beat handle success, leader=2, me=1, term=5, myCommit=0, time=1705031256636
+heart beat handle success, leader=2, me=0, term=5, myCommit=0, time=1705031256660
+  ... Passed --   4.5  3   91   27634    0
+disconnect(0)
+make an entry id=0
+disconnect(1)
+make an entry id=1
+disconnect(2)
+make an entry id=2
+disconnect(3)
+make an entry id=3
+disconnect(4)
+make an entry id=4
+disconnect(5)
+make an entry id=5
+disconnect(6)
+make an entry id=6
+connect(0)
+connect(1)
+connect(2)
+connect(3)
+connect(4)
+connect(5)
+connect(6)
+Test (2A): multiple elections ...
+选举超时, id=1, time=1705031256830
+id=1 vote to itself, term=1, time=1705031256835
+id=1 send to id=6
+id=1 send to id=3
+id=1 send to id=0
+id=1 become leader, lastLogIdx=0, leaderCommit=0
+id=1 send to id=2
+id=1 send to id=4
+id=1 send to id=5
+heart beat handle success, leader=1, me=3, term=1, myCommit=0, time=1705031256852
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031256852
+heart beat handle success, leader=1, me=2, term=1, myCommit=0, time=1705031256852
+heart beat handle success, leader=1, me=3, term=1, myCommit=0, time=1705031256853
+heart beat handle success, leader=1, me=4, term=1, myCommit=0, time=1705031256853
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=2, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=4, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031256854
+heart beat handle success, leader=1, me=3, term=1, myCommit=0, time=1705031256957
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031256961
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031256968
+heart beat handle success, leader=1, me=2, term=1, myCommit=0, time=1705031256968
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031256968
+heart beat handle success, leader=1, me=4, term=1, myCommit=0, time=1705031256969
+heart beat handle success, leader=1, me=3, term=1, myCommit=0, time=1705031257058
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031257069
+heart beat handle success, leader=1, me=4, term=1, myCommit=0, time=1705031257069
+heart beat handle success, leader=1, me=2, term=1, myCommit=0, time=1705031257069
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257069
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257069
+心跳超时, id=1, time=1705031257157
+id=1 vote to itself, term=6, time=1705031257157
+id=1 send to id=2
+id=1 send to id=0
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257175
+heart beat handle success, leader=1, me=3, term=1, myCommit=0, time=1705031257175
+heart beat handle success, leader=1, me=4, term=1, myCommit=0, time=1705031257178
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257190
+disconnect(2)
+disconnect(4)
+disconnect(3)
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031257199
+心跳超时, id=0, time=1705031257196
+id=0 vote to itself, term=6, time=1705031257217
+id=0 send to id=2
+id=0 send to id=1
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257295
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257303
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031257316
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257437
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257437
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031257438
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257568
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257570
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031257577
+心跳超时, id=2, time=1705031257653
+id=2 vote to itself, term=2, time=1705031257665
+id=2 send to id=6
+id=2 send to id=3
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=4
+id=2 send to id=5
+heart beat handle success, leader=1, me=5, term=1, myCommit=0, time=1705031257679
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257679
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257685
+心跳超时, id=3, time=1705031257701
+id=3 vote to itself, term=2, time=1705031257701
+id=3 send to id=6
+id=3 send to id=2
+id=3 send to id=0
+id=3 send to id=1
+connect(2)
+connect(4)
+connect(3)
+disconnect(2)
+disconnect(2)
+disconnect(5)
+id=3 send to id=4
+id=3 send to id=5
+heart beat handle success, leader=1, me=6, term=1, myCommit=0, time=1705031257786
+heart beat handle success, leader=1, me=0, term=1, myCommit=0, time=1705031257805
+id=1 change to follower from leader
+心跳超时, id=5, time=1705031258192
+id=5 vote to itself, term=2, time=1705031258200
+id=5 send to id=6
+id=5 send to id=2
+id=5 send to id=1
+id=5 send to id=3
+id=5 send to id=0
+id=5 send to id=4
+心跳超时, id=4, time=1705031258297
+id=4 vote to itself, term=3, time=1705031258297
+id=4 send to id=6
+id=4 send to id=0
+id=4 send to id=5
+id=4 send to id=2
+id=4 send to id=3
+id=4 send to id=1
+id=4 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258372
+heart beat handle success, leader=4, me=0, term=3, myCommit=0, time=1705031258398
+heart beat handle success, leader=4, me=1, term=3, myCommit=0, time=1705031258399
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031258399
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258399
+heart beat handle success, leader=4, me=0, term=3, myCommit=0, time=1705031258399
+heart beat handle success, leader=4, me=1, term=3, myCommit=0, time=1705031258399
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031258399
+heart beat handle success, leader=4, me=1, term=3, myCommit=0, time=1705031258504
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258504
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031258504
+心跳超时, id=2, time=1705031258531
+id=2 vote to itself, term=3, time=1705031258531
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+heart beat handle success, leader=4, me=0, term=3, myCommit=0, time=1705031258538
+heart beat handle success, leader=4, me=1, term=3, myCommit=0, time=1705031258605
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258605
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031258605
+heart beat handle success, leader=4, me=0, term=3, myCommit=0, time=1705031258656
+connect(2)
+connect(2)
+connect(5)
+disconnect(0)
+disconnect(1)
+disconnect(2)
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258731
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031258761
+heart beat handle success, leader=4, me=5, term=3, myCommit=0, time=1705031258788
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258837
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031258872
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031258937
+heart beat handle success, leader=4, me=5, term=3, myCommit=0, time=1705031258943
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031259012
+server=6, currentTerm=3 >= args.Term=2, reject to vote to server=5
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031259040
+heart beat handle success, leader=4, me=5, term=3, myCommit=0, time=1705031259044
+心跳超时, id=1, time=1705031259137
+id=1 vote to itself, term=4, time=1705031259137
+id=1 send to id=2
+id=1 send to id=0
+id=1 send to id=4
+id=1 send to id=3
+id=1 send to id=5
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031259142
+heart beat handle success, leader=4, me=5, term=3, myCommit=0, time=1705031259149
+id=1 send to id=6
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031259161
+心跳超时, id=0, time=1705031259189
+id=0 vote to itself, term=4, time=1705031259190
+id=0 send to id=6
+id=0 send to id=3
+id=0 send to id=1
+id=0 send to id=2
+id=0 send to id=5
+id=0 send to id=4
+connect(0)
+connect(1)
+connect(2)
+disconnect(5)
+disconnect(2)
+disconnect(5)
+heart beat handle success, leader=4, me=6, term=3, myCommit=0, time=1705031259305
+heart beat handle success, leader=4, me=3, term=3, myCommit=0, time=1705031259368
+心跳超时, id=2, time=1705031259321
+id=2 vote to itself, term=4, time=1705031259398
+id=2 send to id=6
+id=4 change to follower from leader
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+心跳超时, id=5, time=1705031259688
+id=5 vote to itself, term=4, time=1705031259688
+id=5 send to id=6
+id=5 send to id=0
+id=5 send to id=1
+id=5 send to id=2
+id=5 send to id=3
+id=5 send to id=4
+心跳超时, id=6, time=1705031259813
+id=6 vote to itself, term=4, time=1705031259813
+id=6 send to id=5
+id=6 send to id=0
+id=6 send to id=4
+id=6 send to id=2
+id=6 send to id=1
+id=6 send to id=3
+id=6 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=6, me=0, term=4, myCommit=0, time=1705031259901
+heart beat handle success, leader=6, me=1, term=4, myCommit=0, time=1705031259901
+heart beat handle success, leader=6, me=3, term=4, myCommit=0, time=1705031259902
+heart beat handle success, leader=6, me=4, term=4, myCommit=0, time=1705031259902
+heart beat handle success, leader=6, me=0, term=4, myCommit=0, time=1705031259911
+heart beat handle success, leader=6, me=1, term=4, myCommit=0, time=1705031259921
+heart beat handle success, leader=6, me=4, term=4, myCommit=0, time=1705031259939
+heart beat handle success, leader=6, me=3, term=4, myCommit=0, time=1705031259948
+heart beat handle success, leader=6, me=1, term=4, myCommit=0, time=1705031260031
+heart beat handle success, leader=6, me=4, term=4, myCommit=0, time=1705031260108
+heart beat handle success, leader=6, me=0, term=4, myCommit=0, time=1705031260117
+heart beat handle success, leader=6, me=3, term=4, myCommit=0, time=1705031260117
+heart beat handle success, leader=6, me=1, term=4, myCommit=0, time=1705031260177
+心跳超时, id=2, time=1705031260156
+id=2 vote to itself, term=5, time=1705031260196
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+heart beat handle success, leader=6, me=4, term=4, myCommit=0, time=1705031260238
+connect(5)
+connect(2)
+connect(5)
+disconnect(1)
+disconnect(2)
+disconnect(6)
+心跳超时, id=5, time=1705031260396
+id=5 vote to itself, term=5, time=1705031260436
+id=5 send to id=6
+id=5 send to id=2
+id=5 send to id=4
+id=5 send to id=3
+id=5 send to id=0
+id=5 send to id=1
+id=5 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031260451
+heart beat handle success, leader=5, me=3, term=5, myCommit=0, time=1705031260452
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031260452
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031260453
+heart beat handle success, leader=5, me=3, term=5, myCommit=0, time=1705031260453
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031260453
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031260555
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031260575
+heart beat handle success, leader=5, me=3, term=5, myCommit=0, time=1705031260622
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031260674
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031260678
+心跳超时, id=1, time=1705031260709
+id=1 vote to itself, term=5, time=1705031260709
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031260778
+connect(1)
+connect(2)
+connect(6)
+disconnect(3)
+disconnect(1)
+disconnect(2)
+id=6 change to follower from leader
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031260808
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031260881
+heart beat handle success, leader=5, me=6, term=5, myCommit=0, time=1705031260899
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031260909
+心跳超时, id=2, time=1705031260948
+id=2 vote to itself, term=6, time=1705031260948
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+id=2 send to id=1
+heart beat handle success, leader=5, me=0, term=5, myCommit=0, time=1705031261014
+heart beat handle success, leader=5, me=4, term=5, myCommit=0, time=1705031261018
+heart beat handle success, leader=5, me=6, term=5, myCommit=0, time=1705031261041
+server=6, currentTerm=5 >= args.Term=4, reject to vote to server=5
+id=5 change to follower from leader
+心跳超时, id=3, time=1705031261148
+id=3 vote to itself, term=6, time=1705031261154
+id=3 send to id=6
+id=3 send to id=0
+id=3 send to id=1
+id=3 send to id=2
+id=3 send to id=4
+id=3 send to id=5
+server=0, currentTerm=5 >= args.Term=2, reject to vote to server=5
+心跳超时, id=1, time=1705031261481
+id=1 vote to itself, term=6, time=1705031261482
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+心跳超时, id=0, time=1705031261584
+id=0 vote to itself, term=6, time=1705031261584
+id=0 send to id=6
+心跳超时, id=4, time=1705031261606
+id=4 vote to itself, term=6, time=1705031261606
+id=4 send to id=6
+id=4 send to id=0
+id=4 send to id=1
+id=4 send to id=2
+id=4 send to id=5
+id=0 send to id=4
+id=0 send to id=5
+id=4 send to id=3
+id=0 send to id=1
+id=0 send to id=2
+id=0 send to id=3
+心跳超时, id=2, time=1705031261728
+id=2 vote to itself, term=7, time=1705031261729
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+id=4 become leader, lastLogIdx=0, leaderCommit=0
+id=4 change to follower from leader
+心跳超时, id=3, time=1705031261948
+id=3 vote to itself, term=7, time=1705031262073
+id=3 send to id=6
+id=3 send to id=2
+id=3 send to id=0
+id=3 send to id=1
+id=3 send to id=4
+id=3 send to id=5
+心跳超时, id=6, time=1705031262156
+id=6 vote to itself, term=7, time=1705031262156
+id=6 send to id=5
+id=6 send to id=0
+心跳超时, id=5, time=1705031262139
+id=5 vote to itself, term=8, time=1705031262179
+id=5 send to id=6
+id=5 send to id=0
+id=5 send to id=2
+id=5 send to id=1
+id=5 send to id=3
+id=5 send to id=4
+server=0, currentTerm=8 >= args.Term=7, reject to vote to server=6
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 send to id=4
+server=4, currentTerm=8 >= args.Term=7, reject to vote to server=6
+server=0, currentTerm=8 >= args.Term=4, reject to vote to server=5
+心跳超时, id=1, time=1705031262273
+id=1 vote to itself, term=7, time=1705031262277
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+id=1 send to id=2
+心跳超时, id=2, time=1705031262553
+id=2 vote to itself, term=8, time=1705031262553
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+心跳超时, id=0, time=1705031262714
+id=0 vote to itself, term=9, time=1705031262724
+id=0 send to id=6
+id=0 send to id=1
+id=0 send to id=5
+心跳超时, id=4, time=1705031262770
+id=4 vote to itself, term=9, time=1705031262834
+id=4 send to id=6
+id=4 send to id=2
+id=4 send to id=0
+id=4 send to id=5
+id=4 send to id=1
+id=4 send to id=3
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=2
+id=4 become leader, lastLogIdx=0, leaderCommit=0
+id=4 change to follower from leader
+心跳超时, id=3, time=1705031262859
+id=3 vote to itself, term=8, time=1705031262995
+id=3 send to id=6
+id=3 send to id=2
+id=3 send to id=0
+id=3 send to id=1
+id=3 send to id=4
+id=3 send to id=5
+心跳超时, id=1, time=1705031263029
+id=1 vote to itself, term=8, time=1705031263029
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+心跳超时, id=2, time=1705031263258
+id=2 vote to itself, term=9, time=1705031263284
+id=2 send to id=6
+id=2 send to id=4
+id=2 send to id=1
+id=2 send to id=0
+id=2 send to id=3
+id=2 send to id=5
+心跳超时, id=6, time=1705031263334
+id=6 vote to itself, term=10, time=1705031263357
+id=6 send to id=5
+id=6 send to id=0
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 send to id=4
+心跳超时, id=5, time=1705031263384
+id=5 vote to itself, term=10, time=1705031263384
+id=5 send to id=6
+id=5 send to id=0
+id=5 send to id=1
+id=5 send to id=2
+id=5 send to id=3
+id=5 send to id=4
+server=6, currentTerm=10 >= args.Term=4, reject to vote to server=0
+心跳超时, id=1, time=1705031263789
+id=1 vote to itself, term=9, time=1705031263789
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+心跳超时, id=3, time=1705031263791
+id=1 send to id=5
+id=3 vote to itself, term=9, time=1705031263836
+id=3 send to id=6
+id=3 send to id=5
+id=3 send to id=2
+id=3 send to id=4
+id=3 send to id=1
+id=3 send to id=0
+心跳超时, id=4, time=1705031264028
+id=4 vote to itself, term=11, time=1705031264028
+id=4 send to id=6
+id=4 send to id=2
+id=4 send to id=0
+id=4 send to id=1
+id=4 send to id=3
+id=4 send to id=5
+id=4 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264043
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264046
+heart beat handle success, leader=4, me=0, term=11, myCommit=0, time=1705031264046
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264046
+heart beat handle success, leader=4, me=0, term=11, myCommit=0, time=1705031264047
+心跳超时, id=2, time=1705031264041
+id=2 vote to itself, term=10, time=1705031264076
+id=2 send to id=6
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=1
+id=2 send to id=5
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264124
+id=2 send to id=0
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264170
+heart beat handle success, leader=4, me=0, term=11, myCommit=0, time=1705031264170
+heart beat handle success, leader=4, me=0, term=11, myCommit=0, time=1705031264289
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264296
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264299
+connect(3)
+connect(1)
+connect(2)
+disconnect(0)
+disconnect(1)
+disconnect(2)
+server=4, currentTerm=11 >= args.Term=2, reject to vote to server=5
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264434
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264473
+心跳超时, id=1, time=1705031264570
+id=1 vote to itself, term=10, time=1705031264570
+id=1 send to id=6
+heart beat handle success, leader=4, me=3, term=11, myCommit=0, time=1705031264580
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264582
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264655
+heart beat handle success, leader=4, me=3, term=11, myCommit=0, time=1705031264681
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264736
+server=3, currentTerm=11 >= args.Term=10, reject to vote to server=5
+心跳超时, id=0, time=1705031264845
+id=0 vote to itself, term=12, time=1705031264845
+id=0 send to id=6
+id=0 send to id=5
+id=0 send to id=2
+id=0 send to id=3
+id=0 send to id=4
+心跳超时, id=2, time=1705031264853
+id=2 vote to itself, term=11, time=1705031264853
+id=2 send to id=6
+id=0 send to id=1
+heart beat handle success, leader=4, me=6, term=11, myCommit=0, time=1705031264861
+heart beat handle success, leader=4, me=3, term=11, myCommit=0, time=1705031264861
+heart beat handle success, leader=4, me=5, term=11, myCommit=0, time=1705031264861
+server=3, currentTerm=11 >= args.Term=7, reject to vote to server=6
+connect(0)
+connect(1)
+connect(2)
+disconnect(2)
+disconnect(4)
+disconnect(6)
+id=2 send to id=1
+server=1, currentTerm=10 >= args.Term=6, reject to vote to server=0
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=0
+id=2 send to id=5
+server=5, currentTerm=11 >= args.Term=2, reject to vote to server=3
+server=0, currentTerm=10 >= args.Term=4, reject to vote to server=1
+心跳超时, id=6, time=1705031265371
+id=6 vote to itself, term=12, time=1705031265373
+id=6 send to id=5
+id=6 send to id=0
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 send to id=4
+server=1, currentTerm=10 >= args.Term=7, reject to vote to server=3
+心跳超时, id=5, time=1705031265427
+id=5 vote to itself, term=12, time=1705031265429
+id=5 send to id=0
+id=5 send to id=1
+id=5 send to id=3
+id=5 send to id=4
+server=3, currentTerm=12 >= args.Term=8, reject to vote to server=1
+id=5 send to id=2
+id=5 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=5, me=0, term=12, myCommit=0, time=1705031265483
+heart beat handle success, leader=5, me=1, term=12, myCommit=0, time=1705031265483
+heart beat handle success, leader=5, me=3, term=12, myCommit=0, time=1705031265484
+server=5, currentTerm=12 >= args.Term=5, reject to vote to server=1
+id=5 send to id=6
+heart beat handle success, leader=5, me=3, term=12, myCommit=0, time=1705031265587
+server=5, currentTerm=12 >= args.Term=4, reject to vote to server=0
+heart beat handle success, leader=5, me=1, term=12, myCommit=0, time=1705031265619
+server=1, currentTerm=12 >= args.Term=4, reject to vote to server=5
+id=5 change to follower from leader
+heart beat handle success, leader=5, me=0, term=12, myCommit=0, time=1705031265632
+server=3, currentTerm=12 >= args.Term=9, reject to vote to server=1
+server=1, currentTerm=12 >= args.Term=10, reject to vote to server=5
+心跳超时, id=2, time=1705031265697
+id=2 vote to itself, term=12, time=1705031265728
+id=2 send to id=6
+id=2 send to id=4
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=5
+server=1, currentTerm=12 >= args.Term=9, reject to vote to server=0
+server=5, currentTerm=12 >= args.Term=4, reject to vote to server=1
+server=3, currentTerm=12 >= args.Term=4, reject to vote to server=5
+server=0, currentTerm=12 >= args.Term=9, reject to vote to server=1
+server=5, currentTerm=12 >= args.Term=10, reject to vote to server=1
+server=5, currentTerm=12 >= args.Term=9, reject to vote to server=1
+心跳超时, id=6, time=1705031266123
+id=6 vote to itself, term=13, time=1705031266123
+id=6 send to id=5
+心跳超时, id=3, time=1705031266126
+id=3 vote to itself, term=13, time=1705031266181
+id=3 send to id=6
+id=3 send to id=1
+server=1, currentTerm=12 >= args.Term=8, reject to vote to server=3
+id=6 send to id=4
+id=3 send to id=4
+id=6 send to id=1
+id=3 send to id=0
+id=3 send to id=2
+id=6 send to id=2
+id=6 send to id=3
+id=3 send to id=5
+server=1, currentTerm=13 >= args.Term=4, reject to vote to server=0
+id=6 send to id=0
+server=3, currentTerm=12 >= args.Term=6, reject to vote to server=1
+server=0, currentTerm=13 >= args.Term=6, reject to vote to server=1
+server=3, currentTerm=12 >= args.Term=10, reject to vote to server=1
+server=0, currentTerm=13 >= args.Term=8, reject to vote to server=3
+心跳超时, id=2, time=1705031266451
+id=2 vote to itself, term=13, time=1705031266451
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+心跳超时, id=5, time=1705031266722
+id=5 vote to itself, term=14, time=1705031266722
+id=5 send to id=6
+id=5 send to id=0
+心跳超时, id=0, time=1705031266726
+id=0 vote to itself, term=14, time=1705031266752
+id=0 send to id=6
+id=0 send to id=3
+id=0 send to id=1
+id=0 send to id=2
+id=0 send to id=4
+id=0 send to id=5
+id=5 send to id=2
+id=5 send to id=1
+id=5 send to id=3
+id=5 send to id=4
+server=3, currentTerm=14 >= args.Term=7, reject to vote to server=1
+心跳超时, id=6, time=1705031266876
+id=6 vote to itself, term=14, time=1705031266884
+id=6 send to id=5
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 send to id=4
+id=6 send to id=0
+id=0 become leader, lastLogIdx=0, leaderCommit=0
+id=0 change to follower from leader
+server=5, currentTerm=14 >= args.Term=6, reject to vote to server=3
+server=0, currentTerm=14 >= args.Term=6, reject to vote to server=3
+server=3, currentTerm=14 >= args.Term=4, reject to vote to server=1
+server=5, currentTerm=14 >= args.Term=7, reject to vote to server=1
+心跳超时, id=2, time=1705031267273
+id=2 vote to itself, term=14, time=1705031267273
+id=2 send to id=0
+id=2 send to id=6
+id=2 send to id=5
+id=2 send to id=3
+id=2 send to id=1
+id=2 send to id=4
+心跳超时, id=0, time=1705031267437
+id=0 vote to itself, term=15, time=1705031267438
+id=0 send to id=6
+id=0 send to id=2
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+id=0 send to id=1
+心跳超时, id=5, time=1705031267453
+id=5 vote to itself, term=15, time=1705031267454
+id=5 send to id=6
+server=3, currentTerm=14 >= args.Term=6, reject to vote to server=0
+id=5 send to id=3
+id=5 send to id=1
+id=5 send to id=0
+id=5 send to id=4
+id=5 send to id=2
+server=1, currentTerm=15 >= args.Term=2, reject to vote to server=5
+心跳超时, id=6, time=1705031267660
+id=6 vote to itself, term=15, time=1705031267661
+id=6 send to id=5
+id=6 send to id=0
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 send to id=4
+server=3, currentTerm=15 >= args.Term=8, reject to vote to server=5
+server=0, currentTerm=15 >= args.Term=7, reject to vote to server=3
+server=5, currentTerm=15 >= args.Term=6, reject to vote to server=1
+server=1, currentTerm=15 >= args.Term=5, reject to vote to server=5
+server=5, currentTerm=15 >= args.Term=8, reject to vote to server=1
+server=3, currentTerm=15 >= args.Term=5, reject to vote to server=1
+server=5, currentTerm=15 >= args.Term=7, reject to vote to server=3
+server=1, currentTerm=15 >= args.Term=6, reject to vote to server=3
+心跳超时, id=2, time=1705031268123
+id=2 vote to itself, term=15, time=1705031268123
+id=2 send to id=6
+id=2 send to id=0
+id=2 send to id=1
+id=2 send to id=3
+id=2 send to id=4
+id=2 send to id=5
+server=0, currentTerm=15 >= args.Term=7, reject to vote to server=1
+server=3, currentTerm=15 >= args.Term=12, reject to vote to server=0
+心跳超时, id=5, time=1705031268262
+id=5 vote to itself, term=16, time=1705031268360
+id=5 send to id=6
+id=5 send to id=0
+id=5 send to id=1
+id=5 send to id=2
+id=5 send to id=3
+id=5 become leader, lastLogIdx=0, leaderCommit=0
+id=5 send to id=4
+heart beat handle success, leader=5, me=0, term=16, myCommit=0, time=1705031268373
+heart beat handle success, leader=5, me=1, term=16, myCommit=0, time=1705031268374
+heart beat handle success, leader=5, me=3, term=16, myCommit=0, time=1705031268374
+心跳超时, id=6, time=1705031268385
+id=6 vote to itself, term=16, time=1705031268385
+id=6 send to id=5
+id=6 send to id=0
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 send to id=4
+connect(2)
+connect(4)
+connect(6)
+disconnect(0)
+disconnect(4)
+disconnect(1)
+server=5, currentTerm=16 >= args.Term=3, reject to vote to server=2
+heart beat handle success, leader=5, me=3, term=16, myCommit=0, time=1705031268481
+server=2, currentTerm=16 >= args.Term=12, reject to vote to server=6
+heart beat handle success, leader=5, me=2, term=16, myCommit=0, time=1705031268580
+heart beat handle success, leader=5, me=3, term=16, myCommit=0, time=1705031268586
+server=2, currentTerm=16 >= args.Term=10, reject to vote to server=6
+heart beat handle success, leader=5, me=6, term=16, myCommit=0, time=1705031268641
+server=6, currentTerm=16 >= args.Term=15, reject to vote to server=5
+id=5 change to follower from leader
+server=3, currentTerm=16 >= args.Term=10, reject to vote to server=6
+server=6, currentTerm=16 >= args.Term=14, reject to vote to server=5
+心跳超时, id=1, time=1705031268880
+id=1 vote to itself, term=17, time=1705031268881
+id=1 send to id=6
+id=1 send to id=0
+server=2, currentTerm=16 >= args.Term=4, reject to vote to server=6
+心跳超时, id=0, time=1705031268895
+id=0 vote to itself, term=17, time=1705031268895
+id=0 send to id=6
+server=6, currentTerm=16 >= args.Term=10, reject to vote to server=2
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+id=0 send to id=1
+id=0 send to id=2
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+server=6, currentTerm=16 >= args.Term=5, reject to vote to server=2
+心跳超时, id=3, time=1705031269125
+id=3 vote to itself, term=17, time=1705031269160
+id=3 send to id=6
+id=3 send to id=0
+id=3 send to id=1
+id=3 send to id=2
+id=3 send to id=4
+id=3 send to id=5
+id=3 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=3, me=6, term=17, myCommit=0, time=1705031269205
+heart beat handle success, leader=3, me=2, term=17, myCommit=0, time=1705031269216
+heart beat handle success, leader=3, me=5, term=17, myCommit=0, time=1705031269235
+heart beat handle success, leader=3, me=2, term=17, myCommit=0, time=1705031269235
+heart beat handle success, leader=3, me=5, term=17, myCommit=0, time=1705031269236
+server=3, currentTerm=17 >= args.Term=11, reject to vote to server=2
+server=3, currentTerm=17 >= args.Term=10, reject to vote to server=2
+heart beat handle success, leader=3, me=6, term=17, myCommit=0, time=1705031269295
+heart beat handle success, leader=3, me=2, term=17, myCommit=0, time=1705031269337
+heart beat handle success, leader=3, me=5, term=17, myCommit=0, time=1705031269339
+server=6, currentTerm=17 >= args.Term=2, reject to vote to server=2
+server=2, currentTerm=17 >= args.Term=7, reject to vote to server=3
+id=3 change to follower from leader
+server=2, currentTerm=17 >= args.Term=15, reject to vote to server=5
+server=3, currentTerm=17 >= args.Term=7, reject to vote to server=2
+server=5, currentTerm=17 >= args.Term=2, reject to vote to server=2
+server=3, currentTerm=17 >= args.Term=2, reject to vote to server=5
+server=6, currentTerm=17 >= args.Term=7, reject to vote to server=2
+server=6, currentTerm=17 >= args.Term=12, reject to vote to server=2
+server=5, currentTerm=17 >= args.Term=8, reject to vote to server=3
+server=6, currentTerm=17 >= args.Term=8, reject to vote to server=2
+心跳超时, id=1, time=1705031269640
+server=2, currentTerm=17 >= args.Term=6, reject to vote to server=3
+id=1 vote to itself, term=18, time=1705031269683
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+server=6, currentTerm=17 >= args.Term=16, reject to vote to server=5
+server=5, currentTerm=17 >= args.Term=4, reject to vote to server=6
+心跳超时, id=0, time=1705031269739
+server=6, currentTerm=17 >= args.Term=9, reject to vote to server=3
+id=0 vote to itself, term=18, time=1705031269770
+id=0 send to id=2
+id=0 send to id=1
+server=2, currentTerm=17 >= args.Term=13, reject to vote to server=6
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+id=0 send to id=6
+server=2, currentTerm=17 >= args.Term=7, reject to vote to server=6
+server=3, currentTerm=17 >= args.Term=3, reject to vote to server=2
+server=3, currentTerm=17 >= args.Term=2, reject to vote to server=2
+server=6, currentTerm=17 >= args.Term=9, reject to vote to server=2
+server=2, currentTerm=17 >= args.Term=2, reject to vote to server=5
+server=5, currentTerm=17 >= args.Term=7, reject to vote to server=2
+server=6, currentTerm=17 >= args.Term=2, reject to vote to server=3
+server=5, currentTerm=17 >= args.Term=15, reject to vote to server=6
+server=3, currentTerm=17 >= args.Term=4, reject to vote to server=2
+server=3, currentTerm=17 >= args.Term=5, reject to vote to server=2
+server=5, currentTerm=17 >= args.Term=9, reject to vote to server=3
+server=6, currentTerm=17 >= args.Term=15, reject to vote to server=2
+server=3, currentTerm=17 >= args.Term=12, reject to vote to server=6
+server=3, currentTerm=17 >= args.Term=8, reject to vote to server=2
+心跳超时, id=1, time=1705031270493
+id=1 vote to itself, term=19, time=1705031270494
+id=1 send to id=6
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=3
+id=1 send to id=4
+id=1 send to id=5
+心跳超时, id=0, time=1705031270506
+id=0 vote to itself, term=19, time=1705031270508
+server=2, currentTerm=17 >= args.Term=10, reject to vote to server=5
+server=2, currentTerm=17 >= args.Term=13, reject to vote to server=3
+server=5, currentTerm=17 >= args.Term=15, reject to vote to server=2
+id=0 send to id=6
+id=0 send to id=1
+id=0 send to id=2
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+server=2, currentTerm=17 >= args.Term=12, reject to vote to server=5
+server=2, currentTerm=17 >= args.Term=4, reject to vote to server=5
+server=6, currentTerm=17 >= args.Term=13, reject to vote to server=3
+server=3, currentTerm=17 >= args.Term=13, reject to vote to server=2
+server=2, currentTerm=17 >= args.Term=8, reject to vote to server=3
+server=2, currentTerm=17 >= args.Term=16, reject to vote to server=5
+server=6, currentTerm=17 >= args.Term=4, reject to vote to server=2
+server=6, currentTerm=17 >= args.Term=6, reject to vote to server=3
+server=2, currentTerm=17 >= args.Term=2, reject to vote to server=3
+心跳超时, id=6, time=1705031270953
+id=6 vote to itself, term=18, time=1705031270953
+id=6 send to id=5
+id=6 send to id=0
+id=6 send to id=1
+id=6 send to id=2
+id=6 send to id=3
+id=6 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=6, me=5, term=18, myCommit=0, time=1705031270960
+id=6 send to id=4
+server=2, currentTerm=18 >= args.Term=5, reject to vote to server=5
+heart beat handle success, leader=6, me=2, term=18, myCommit=0, time=1705031270960
+heart beat handle success, leader=6, me=3, term=18, myCommit=0, time=1705031270963
+server=6, currentTerm=18 >= args.Term=13, reject to vote to server=2
+heart beat handle success, leader=6, me=2, term=18, myCommit=0, time=1705031271061
+heart beat handle success, leader=6, me=5, term=18, myCommit=0, time=1705031271061
+server=3, currentTerm=18 >= args.Term=15, reject to vote to server=6
+id=6 change to follower from leader
+server=5, currentTerm=18 >= args.Term=16, reject to vote to server=6
+heart beat handle success, leader=6, me=3, term=18, myCommit=0, time=1705031271237
+心跳超时, id=0, time=1705031271238
+id=0 vote to itself, term=20, time=1705031271241
+id=0 send to id=6
+id=0 send to id=1
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+id=0 send to id=2
+server=5, currentTerm=18 >= args.Term=13, reject to vote to server=6
+心跳超时, id=1, time=1705031271324
+id=1 vote to itself, term=20, time=1705031271325
+id=1 send to id=3
+id=1 send to id=0
+id=1 send to id=2
+id=1 send to id=6
+server=3, currentTerm=18 >= args.Term=9, reject to vote to server=2
+server=5, currentTerm=18 >= args.Term=4, reject to vote to server=2
+server=6, currentTerm=18 >= args.Term=8, reject to vote to server=3
+id=1 send to id=4
+id=1 send to id=5
+server=2, currentTerm=18 >= args.Term=14, reject to vote to server=5
+server=2, currentTerm=18 >= args.Term=15, reject to vote to server=6
+server=6, currentTerm=18 >= args.Term=12, reject to vote to server=5
+server=3, currentTerm=18 >= args.Term=14, reject to vote to server=6
+server=5, currentTerm=18 >= args.Term=13, reject to vote to server=2
+server=6, currentTerm=18 >= args.Term=6, reject to vote to server=2
+心跳超时, id=3, time=1705031271888
+id=3 vote to itself, term=19, time=1705031271888
+id=3 send to id=6
+id=3 send to id=2
+id=3 send to id=4
+id=3 send to id=5
+id=3 send to id=0
+id=3 send to id=1
+id=3 become leader, lastLogIdx=0, leaderCommit=0
+heart beat handle success, leader=3, me=6, term=19, myCommit=0, time=1705031271889
+heart beat handle success, leader=3, me=2, term=19, myCommit=0, time=1705031271889
+heart beat handle success, leader=3, me=5, term=19, myCommit=0, time=1705031271889
+server=5, currentTerm=19 >= args.Term=12, reject to vote to server=2
+心跳超时, id=0, time=1705031271969
+id=0 vote to itself, term=21, time=1705031271970
+id=0 send to id=6
+id=0 send to id=1
+id=0 send to id=2
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+server=5, currentTerm=19 >= args.Term=9, reject to vote to server=2
+heart beat handle success, leader=3, me=6, term=19, myCommit=0, time=1705031271994
+heart beat handle success, leader=3, me=5, term=19, myCommit=0, time=1705031271996
+心跳超时, id=1, time=1705031272021
+id=1 vote to itself, term=21, time=1705031272037
+id=1 send to id=6
+id=1 send to id=3
+id=1 send to id=2
+id=1 send to id=4
+id=1 send to id=5
+id=1 send to id=0
+server=5, currentTerm=19 >= args.Term=5, reject to vote to server=2
+server=6, currentTerm=19 >= args.Term=7, reject to vote to server=3
+id=3 change to follower from leader
+server=3, currentTerm=19 >= args.Term=12, reject to vote to server=2
+server=5, currentTerm=19 >= args.Term=12, reject to vote to server=6
+server=3, currentTerm=19 >= args.Term=6, reject to vote to server=2
+server=6, currentTerm=19 >= args.Term=11, reject to vote to server=2
+心跳超时, id=5, time=1705031272558
+心跳超时, id=3, time=1705031272611
+id=3 vote to itself, term=20, time=1705031272612
+id=3 send to id=6
+id=3 send to id=0
+id=3 send to id=1
+id=3 send to id=2
+id=3 send to id=4
+id=3 send to id=5
+id=5 vote to itself, term=20, time=1705031272603
+id=5 send to id=6
+id=5 send to id=1
+id=5 send to id=2
+id=5 send to id=0
+id=5 send to id=3
+id=5 send to id=4
+心跳超时, id=0, time=1705031272717
+心跳超时, id=1, time=1705031272797
+id=1 vote to itself, term=22, time=1705031272798
+id=1 send to id=6
+id=1 send to id=5
+id=1 send to id=4
+id=1 send to id=3
+id=0 vote to itself, term=22, time=1705031272757
+id=0 send to id=6
+id=0 send to id=3
+id=0 send to id=4
+id=0 send to id=5
+id=0 send to id=1
+id=0 send to id=2
+id=1 send to id=0
+id=5 become leader, lastLogIdx=0, leaderCommit=0
+server=3, currentTerm=20 >= args.Term=13, reject to vote to server=6
+heart beat handle success, leader=5, me=2, term=20, myCommit=0, time=1705031272822
+heart beat handle success, leader=5, me=3, term=20, myCommit=0, time=1705031272822
+heart beat handle success, leader=5, me=6, term=20, myCommit=0, time=1705031272822
+id=5 change to follower from leader
+id=1 send to id=2
+server=5, currentTerm=20 >= args.Term=14, reject to vote to server=2
+server=5, currentTerm=20 >= args.Term=8, reject to vote to server=2
+server=2, currentTerm=20 >= args.Term=16, reject to vote to server=6
+server=5, currentTerm=20 >= args.Term=14, reject to vote to server=6
+server=5, currentTerm=20 >= args.Term=6, reject to vote to server=2
+server=2, currentTerm=20 >= args.Term=14, reject to vote to server=6
+心跳超时, id=5, time=1705031273378
+id=5 vote to itself, term=21, time=1705031273378
+id=5 send to id=0
+id=5 send to id=6
+id=5 send to id=3
+id=5 send to id=1
+id=5 send to id=4
+id=5 send to id=2
+--- FAIL: TestManyElections2A (16.80s)
+    config.go:454: expected one leader, got none
+FAIL
+exit status 1
+FAIL	6.5840/raft	23.418s
