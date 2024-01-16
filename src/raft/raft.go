@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.5840/labgob"
+	"bytes"
 	"fmt"
 	"strconv"
 
@@ -183,6 +185,15 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
+	buf := new(bytes.Buffer)
+	e := labgob.NewEncoder(buf)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.voteFor)
+	e.Encode(rf.commitIndex)
+	// TODO 2D:需要把上一次快照的位置进行持久化
+	e.Encode(rf.log)
+	raftState := buf.Bytes()
+	rf.persister.Save(raftState, nil)
 }
 
 // restore previously persisted state.
@@ -192,17 +203,25 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var voteFor int
+	var commitIndex int
+	var log []ApplyMsg
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&voteFor) != nil ||
+		d.Decode(&commitIndex) != nil ||
+		d.Decode(&log) != nil {
+		//error...
+		DPrintf("server=%d read data error\n", rf.id)
+	} else {
+		rf.currentTerm = currentTerm
+		rf.voteFor = voteFor
+		rf.commitIndex = commitIndex
+		rf.log = log
+		DPrintf("server=%d read data success! term=%d, voteFor=%d, commitIndex=%d, log=%v\n", rf.id, rf.currentTerm, rf.voteFor, rf.commitIndex, rf.log)
+	}
 }
 
 // the service says it has created a snapshot that has
@@ -245,6 +264,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	// 当前任期未投票，则需要投票
+	defer rf.persist()
 	if args.Term > rf.currentTerm {
 		// 可能是leader断网之后，发现其他节点正在选举
 		if rf.role == LEADER {
@@ -264,23 +284,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.changeRole(FOLLOWER)
 		rf.electionTimer.Stop()
 	}
-	//if rf.voteFor == -1 || rf.voteFor == args.CandidateId {
-	//	if len(rf.log) == 0 || rf.commitIndex == 0 {
-	//		rf.voteFor = args.CandidateId
-	//		rf.currentTerm = args.Term
-	//		reply.CurrTerm = args.Term
-	//		reply.VoteGranted = true
-	//		DPrintf("id=%d vote to id=%d, term=%d\n", rf.id, rf.voteFor, rf.currentTerm)
-	//		return
-	//	}
-	//	log := rf.log[GenLogIdx(rf.commitIndex)]
-	//	if args.PrevLogTerm >= log.ReceiveTerm && args.PrevLogIndex >= log.CommandIndex {
-	//		reply.CurrTerm = args.Term
-	//		reply.VoteGranted = true
-	//		rf.voteFor = args.CandidateId
-	//		DPrintf("id=%d vote to id=%d, term=%d\n", rf.id, rf.voteFor, rf.currentTerm)
-	//	}
-	//}
 	if !reply.VoteGranted {
 		DPrintf("server=%d currentTerm=%d > args.Term=%d, vote reject\n", rf.id, rf.currentTerm, args.Term)
 	}
@@ -368,7 +371,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		PrevLogIndex: prevLogIndex,
 		PrevLogTerm:  prevLogTerm,
 	}
-	rf.voteFor = rf.id
+	rf.persist()
 	voteCount := 1
 	chResCount := 1
 	votesCh := make(chan bool, len(rf.peers))
@@ -387,6 +390,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 			if reply.CurrTerm > args.Term {
 				rf.currentTerm = reply.CurrTerm
 				rf.changeRole(FOLLOWER)
+				rf.persist()
 			}
 		}(&votesCh, index)
 	}
@@ -423,6 +427,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 	if rf.currentTerm == args.Term && rf.leader == VoteForInvalid && rf.role == CANDIDATE {
 		DPrintf("id=%d become leader, lastLogIdx=%d, leaderCommit=%d, log=%v\n", rf.id, rf.lastLogIndex(), rf.commitIndex, rf.log)
 		rf.changeRole(LEADER)
+		rf.persist()
 		//DPrintf("id=%d become leader, lastLogIdx=%d, leaderCommit=%d\n", rf.id, rf.lastLogIndex(), rf.commitIndex)
 	} else {
 		rf.changeRole(FOLLOWER)
@@ -473,7 +478,7 @@ func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
 			args.PrevLogIndex = prevCommand.CommandIndex
 			args.PrevLogTerm = prevCommand.ReceiveTerm
 		}
-		DPrintf("genArgs nextIndex=%d, receiver=%d, leaderLog=%v\n", rf.nextIndex[server], server, rf.log)
+		DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, leaderLog=%v\n", rf.nextIndex[server], rf.id, server, rf.log)
 		args.Entries = rf.log[GenLogIdx(rf.nextIndex[server]):]
 		//// 限制单次rpc数量
 		//if len(args.Entries) > 8 {
@@ -589,6 +594,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
 	rf.leader = args.LeaderId
 	reply.Term = rf.currentTerm
+	defer rf.persist()
 	if args.Entries == nil {
 		logIndex := rf.lastLogIndex()
 		originIndex := logIndex
@@ -624,8 +630,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if len(rf.log) == 0 {
 		if args.PrevLogTerm == EmptyCmdTerm && args.PrevLogIndex == EmptyCmdIdx {
 			rf.log = append(rf.log, args.Entries...)
-			//reply.Term = rf.currentTerm
 			reply.Success = true
+			rf.updateCommitEntries(args.LeaderCommit)
 		} else {
 			reply.Success = false
 		}
@@ -710,9 +716,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				panic(fmt.Sprintf("leader=%d's matchIndexLen=%d, but expect len=%d, matchIndex=%v\n", rf.id, len(rf.matchIndex), len(rf.peers), rf.matchIndex))
 			}
 			rf.matchIndex[rf.me] = index
+			rf.persist()
+			DPrintf("leader=%d receive one log, logIndex=%d, log=%v\n", rf.id, index, command)
 		}
-		rf.persist()
-		DPrintf("leader=%d receive one log, logIndex=%d, log=%v\n", rf.id, index, command)
 	}
 	return index, term, isLeader
 }
@@ -787,6 +793,7 @@ func (rf *Raft) registerUpdateLeaderCommit() {
 			case <-rf.commitUpdateTimer.C:
 				{
 					rf.updateCommit()
+					rf.persist()
 				}
 			}
 			rf.commitUpdateTimer.Stop()
@@ -811,6 +818,7 @@ func (rf *Raft) updateCommit() {
 				DPrintf("leader=%d log=%d未达成共识\n", rf.id, i)
 				break
 			}
+			//rf.persist()
 			rf.applyCh <- rf.log[GenLogIdx(i)]
 			newlyCommit = append(newlyCommit, i)
 			rf.commitIndex++
@@ -882,12 +890,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.role = FOLLOWER
 	rf.leader = VoteForInvalid
-	rf.voteFor = -1
+	rf.voteFor = VoteForInvalid
 	rf.id = me
 	rf.log = []ApplyMsg{}
 	rf.applyCh = applyCh
 	rf.commitIndex = 0
 	rf.lastApplied = 0
+	rf.currentTerm = 0
+	// initialize from state persisted before a crash
+	rf.readPersist(persister.ReadRaftState())
+
 	rf.waitHeartBeatTimer = time.NewTimer(time.Duration(HeartBeatTimeOut+rand.Int63()%100) * time.Millisecond)
 	rf.electionTimer = time.NewTimer(randomElectTimeOut())
 	rf.heartBeatTimer = make([]*time.Timer, len(peers))
@@ -896,8 +908,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	}
 	// Your initialization code here (2A, 2B, 2C).
 	DPrintf("make an entry id=%s\n", strconv.Itoa(me))
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()

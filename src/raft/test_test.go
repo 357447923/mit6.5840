@@ -485,7 +485,6 @@ func TestRejoin2B(t *testing.T) {
 	cfg.connect(leader1)
 	// Dprintf("server=%d rejoin\n", leader1)
 	cfg.one(104, 2, true)
-	// TODO rejoin之后，不知道为什么剩余两个节点无法选出leader
 	// all together now
 	cfg.connect(leader2)
 	// Dprintf("server=%d rejoin\n", leader2)
