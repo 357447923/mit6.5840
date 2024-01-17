@@ -135,6 +135,7 @@ func (cfg *config) crash1(i int) {
 		cfg.saved[i] = &Persister{}
 		cfg.saved[i].Save(raftlog, snapshot)
 	}
+	DPrintf("server=%d crash\n", i)
 }
 
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {

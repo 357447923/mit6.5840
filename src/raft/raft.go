@@ -46,6 +46,8 @@ const (
 	BaseElectTimeOut = 150
 	HeartBeatTimeOut = 500
 	OneHeartBeatLag  = 100
+	UpdateCommitLag  = 200
+	ApplyLogLag      = 200
 	RPCTimeOut       = 80
 )
 
@@ -95,6 +97,7 @@ type Raft struct {
 	heartBeatTimer     []*time.Timer
 	waitHeartBeatTimer *time.Timer
 	commitUpdateTimer  *time.Timer
+	applyLogTimer      *time.Timer
 
 	// exists stably in all server as follows（持久数据）
 	currentTerm int        // last Term of server knowing
@@ -262,9 +265,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term < rf.currentTerm {
 		DPrintf("server=%d, currentTerm=%d >= args.Term=%d, reject to vote to server=%d\n", rf.id, rf.currentTerm, args.Term, args.CandidateId)
 		return
+	} else if args.Term == rf.currentTerm {
+		if rf.role == LEADER {
+			return
+		}
+		if rf.voteFor == args.CandidateId {
+			reply.VoteGranted = true
+			return
+		}
+		if rf.voteFor != -1 && rf.voteFor != args.CandidateId {
+			return
+		}
 	}
 	// 当前任期未投票，则需要投票
 	defer rf.persist()
+	originTerm := rf.currentTerm
 	if args.Term > rf.currentTerm {
 		// 可能是leader断网之后，发现其他节点正在选举
 		if rf.role == LEADER {
@@ -277,16 +292,19 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.voteFor = VoteForInvalid
 	}
 	lastLogTerm, lastLogIndex := rf.lastLogTermIndex()
-	if !(lastLogTerm > args.PrevLogTerm || (args.PrevLogTerm == lastLogTerm && args.PrevLogIndex < lastLogIndex)) {
-		rf.currentTerm = args.Term
-		rf.voteFor = args.CandidateId
-		reply.VoteGranted = true
-		rf.changeRole(FOLLOWER)
-		rf.electionTimer.Stop()
-	}
-	if !reply.VoteGranted {
+	if lastLogTerm > args.PrevLogTerm || (args.PrevLogTerm == lastLogTerm && args.PrevLogIndex < lastLogIndex) {
 		DPrintf("server=%d currentTerm=%d > args.Term=%d, vote reject\n", rf.id, rf.currentTerm, args.Term)
+		return
 	}
+
+	rf.currentTerm = args.Term
+	rf.voteFor = args.CandidateId
+	reply.CurrTerm = rf.currentTerm
+	reply.VoteGranted = true
+	rf.changeRole(FOLLOWER)
+	rf.electionTimer.Stop()
+	DPrintf("server=%d currentTerm=%d, originTerm=%d, vote server=%d\n", rf.id, rf.currentTerm, originTerm, args.CandidateId)
+
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -381,7 +399,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		}
 		go func(ch *chan bool, index int) {
 			var reply RequestVoteReply
-			DPrintf("id=%d send to id=%d\n", rf.id, index)
+			//DPrintf("id=%d send to id=%d\n", rf.id, index)
 			end := rf.sendRequestVote(index, &args, &reply)
 			if !end {
 				return
@@ -480,10 +498,10 @@ func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
 		}
 		DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, leaderLog=%v\n", rf.nextIndex[server], rf.id, server, rf.log)
 		args.Entries = rf.log[GenLogIdx(rf.nextIndex[server]):]
-		//// 限制单次rpc数量
-		//if len(args.Entries) > 8 {
-		//	args.Entries = args.Entries[0:8]
-		//}
+		// 限制单次rpc数量
+		if len(args.Entries) > 8 {
+			args.Entries = args.Entries[0:8]
+		}
 	} else {
 		// 用于同步matchIndex和nextIndex
 		args.Entries = nil
@@ -555,21 +573,12 @@ func (rf *Raft) updateCommitEntries(leaderCommit int) {
 	lastIndex := rf.lastLogIndex()
 	originCommitIndex := rf.commitIndex
 	rf.commitIndex = min(leaderCommit, lastIndex)
-	newlyCommit := []int{}
 	if originCommitIndex != rf.commitIndex {
 		DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d, log=%v\n",
 			rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex, rf.log)
-	}
-	for i := originCommitIndex + 1; i <= rf.commitIndex; i++ {
-		newlyCommit = append(newlyCommit, i)
-		if len(rf.log) < i {
-			DPrintf("server=%d, len(rf.log)=%d, commitIndex=%d\n", rf.id, len(rf.log), rf.commitIndex)
+		if originCommitIndex != rf.commitIndex {
+			rf.applyLogAsyncNow()
 		}
-		rf.applyCh <- rf.log[GenLogIdx(i)]
-		DPrintf("follower=%d put log=%v into it's rf.applyCh\n", rf.id, rf.log[GenLogIdx(i)])
-	}
-	if len(newlyCommit) > 0 {
-		DPrintf("follower=%d refresh commit success, put logIndex=%v\n", rf.id, newlyCommit)
 	}
 }
 
@@ -622,7 +631,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.leader, rf.id, rf.currentTerm, rf.commitIndex, time.Now().UnixMilli())
 		return
 	}
-	DPrintf("follower=%d handle logs, args=%v\n", rf.id, args)
+	DPrintf("follower=%d handle logs, curTerm=%d, args=%v\n", rf.id, rf.currentTerm, args)
 	if len(args.Entries) > 0 {
 		DPrintf("follower=%d will handle count=%d, curIndex=%d\n", rf.id, len(args.Entries), rf.lastLogIndex())
 	}
@@ -697,7 +706,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := rf.role == LEADER
-	rf.voteFor = VoteForInvalid
 	// Your code here (2B).
 	if isLeader {
 		rf.mu.Lock()
@@ -717,7 +725,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}
 			rf.matchIndex[rf.me] = index
 			rf.persist()
-			DPrintf("leader=%d receive one log, logIndex=%d, log=%v\n", rf.id, index, command)
+			DPrintf("leader=%d receive one log, logIndex=%d, curTerm=%d,log=%v\n", rf.id, index, rf.currentTerm, rf.log)
 		}
 	}
 	return index, term, isLeader
@@ -781,10 +789,10 @@ func (rf *Raft) fastNotifyLeaderChangeAndRegisterHeartBeat() {
 
 func (rf *Raft) registerUpdateLeaderCommit() {
 	if rf.commitUpdateTimer == nil {
-		rf.commitUpdateTimer = time.NewTimer(300 * time.Millisecond)
+		rf.commitUpdateTimer = time.NewTimer(UpdateCommitLag * time.Millisecond)
 	} else {
 		rf.commitUpdateTimer.Stop()
-		rf.commitUpdateTimer.Reset(300 * time.Millisecond)
+		rf.commitUpdateTimer.Reset(UpdateCommitLag * time.Millisecond)
 	}
 
 	go func() {
@@ -806,8 +814,15 @@ func (rf *Raft) registerUpdateLeaderCommit() {
 func (rf *Raft) updateCommit() {
 	// TODO 2D做快照后，这里都得修改
 	if rf.lastLogIndex() > rf.commitIndex {
-		newlyCommit := []int{}
+		originCommitIndex := rf.commitIndex
 		for i := rf.commitIndex + 1; i <= rf.lastLogIndex(); i++ {
+			// 如raft论文所讲，非当前任期的日志，不能由当前的leader进行commit，而是通过提交当前任期的日志来进行间接的提交
+			// 但这种做法是有问题的，例如: 宕机后选举出leader后任期就不同了，然后这条日志之后也没有新日志的加入，就会导致永远不会被提交
+			// 因为永远不会被提交，所以也不会被状态机应用
+			// 解决这个问题可以研究一下no-op，在6.824中并不讨论这个问题
+			if rf.log[GenLogIdx(i)].ReceiveTerm != rf.currentTerm {
+				continue
+			}
 			receive := 0
 			for _, matchIndex := range rf.matchIndex {
 				if matchIndex >= i {
@@ -818,14 +833,11 @@ func (rf *Raft) updateCommit() {
 				DPrintf("leader=%d log=%d未达成共识\n", rf.id, i)
 				break
 			}
-			//rf.persist()
-			rf.applyCh <- rf.log[GenLogIdx(i)]
-			newlyCommit = append(newlyCommit, i)
-			rf.commitIndex++
+			rf.commitIndex = i
+			DPrintf("leader=%d 发现logIndex=%d达成了共识, matchIndex=%v\n", rf.id, rf.commitIndex, rf.matchIndex)
 		}
-		if len(newlyCommit) > 0 {
-			DPrintf("leader=%d refresh commit success, put logIndex=%v, rf.matchIndex=%v\n",
-				rf.id, newlyCommit, rf.matchIndex)
+		if originCommitIndex != rf.commitIndex {
+			rf.applyLogAsyncNow()
 		}
 	}
 }
@@ -866,6 +878,11 @@ func (rf *Raft) resetWaitHeartBeatTimer() {
 func (rf *Raft) resetElectTimeOut() {
 	rf.electionTimer.Stop()
 	rf.electionTimer.Reset(randomElectTimeOut())
+}
+
+func (rf *Raft) applyLogAsyncNow() {
+	rf.applyLogTimer.Stop()
+	rf.applyLogTimer.Reset(0)
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -911,6 +928,34 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+
+	// 注册日志应用到状态机的任务
+	go func() {
+		rf.applyLogTimer = time.NewTimer(0)
+		for {
+			select {
+			case <-rf.applyLogTimer.C:
+				{
+					originApply := rf.lastApplied
+					for rf.lastApplied < rf.commitIndex {
+						rf.lastApplied++
+						rf.applyCh <- rf.log[GenLogIdx(rf.lastApplied)]
+						DPrintf("server=%d apply log=%v \n", rf.id, rf.log[GenLogIdx(rf.lastApplied)])
+					}
+					if rf.lastApplied > originApply {
+						if rf.role == LEADER {
+							DPrintf("leader=%d refresh commit success, apply log from index=%d to index=%d, rf.matchIndex=%v\n",
+								rf.id, originApply, rf.lastApplied, rf.matchIndex)
+						} else {
+							DPrintf("follower=%d refresh commit success, apply log from index=%d to index=%d\n", rf.id, originApply, rf.lastApplied)
+						}
+					}
+				}
+			}
+			rf.applyLogTimer.Stop()
+			rf.applyLogTimer.Reset(ApplyLogLag * time.Millisecond)
+		}
+	}()
 
 	return rf
 }
