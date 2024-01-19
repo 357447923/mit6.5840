@@ -142,16 +142,17 @@ func (rf *Raft) changeRole(role Role) {
 			rf.electionTimer.Stop()
 
 			rf.nextIndex = make([]int, len(rf.peers))
+			lastIndex := rf.lastLogIndex()
 			for i := range rf.nextIndex {
-				rf.nextIndex[i] = rf.commitIndex + 1
+				rf.nextIndex[i] = lastIndex + 1
 			}
 			rf.matchIndex = make([]int, len(rf.peers))
 			DPrintf("all matchIndex reset\n")
 			for i := range rf.matchIndex {
-				rf.matchIndex[i] = rf.commitIndex
+				rf.matchIndex[i] = lastIndex
 			}
 			rf.fastNotifyLeaderChangeAndRegisterHeartBeat()
-			rf.registerUpdateLeaderCommit()
+			//rf.registerUpdateLeaderCommit()
 		}
 	case FOLLOWER:
 		{
@@ -223,7 +224,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.voteFor = voteFor
 		rf.commitIndex = commitIndex
 		rf.log = log
-		DPrintf("server=%d read data success! term=%d, voteFor=%d, commitIndex=%d, log=%v\n", rf.id, rf.currentTerm, rf.voteFor, rf.commitIndex, rf.log)
+		DPrintf("server=%d read data success! term=%d, voteFor=%d, commitIndex=%d\n", rf.id, rf.currentTerm, rf.voteFor, rf.commitIndex)
 	}
 }
 
@@ -303,7 +304,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = true
 	rf.changeRole(FOLLOWER)
 	rf.electionTimer.Stop()
-	DPrintf("server=%d currentTerm=%d, originTerm=%d, vote server=%d\n", rf.id, rf.currentTerm, originTerm, args.CandidateId)
+	DPrintf("server=%d currentTerm=%d, originTerm=%d, lastLogIndex=%d, lastLogTerm=%d, args.PrevLogTerm=%d, args.PrevLogIndex=%d, vote server=%d\n",
+		rf.id, rf.currentTerm, originTerm, lastLogIndex, lastLogTerm, args.PrevLogTerm, args.PrevLogIndex, args.CandidateId)
 
 }
 
@@ -335,8 +337,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+	end := make(chan bool, 1)
+	stop := time.NewTimer(RPCTimeOut * time.Millisecond)
+	go func() {
+		ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+		end <- ok
+	}()
+	select {
+	case <-stop.C:
+		return false
+	case ok := <-end:
+		return ok
+	}
 }
 
 func (rf *Raft) lastLogIndex() int {
@@ -400,7 +412,10 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		go func(ch *chan bool, index int) {
 			var reply RequestVoteReply
 			//DPrintf("id=%d send to id=%d\n", rf.id, index)
-			end := rf.sendRequestVote(index, &args, &reply)
+			end := false
+			for !end && rf.role == CANDIDATE {
+				end = rf.sendRequestVote(index, &args, &reply)
+			}
 			if !end {
 				return
 			}
@@ -418,6 +433,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		case <-rf.electionTimer.C:
 			{
 				rf.changeRole(FOLLOWER)
+				rf.resetElectTimeOut()
 				return false
 			}
 		case r := <-votesCh:
@@ -443,7 +459,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 
 	// 保证当前任期与选举后任期一致, 保证在期间没有收到过新的leader的心跳
 	if rf.currentTerm == args.Term && rf.leader == VoteForInvalid && rf.role == CANDIDATE {
-		DPrintf("id=%d become leader, lastLogIdx=%d, leaderCommit=%d, log=%v\n", rf.id, rf.lastLogIndex(), rf.commitIndex, rf.log)
+		DPrintf("id=%d become leader, lastLogIdx=%d, leaderCommit=%d\n", rf.id, rf.lastLogIndex(), rf.commitIndex)
 		rf.changeRole(LEADER)
 		rf.persist()
 		//DPrintf("id=%d become leader, lastLogIdx=%d, leaderCommit=%d\n", rf.id, rf.lastLogIndex(), rf.commitIndex)
@@ -464,8 +480,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int  // 当前任期号
-	Success bool // append操作被接受了
+	Term      int  // 当前任期号
+	Success   bool // append操作被接受了
+	NextIndex int
 }
 
 func min(a int, b int) int {
@@ -476,7 +493,7 @@ func min(a int, b int) int {
 	}
 }
 
-func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
+func (rf *Raft) genAppendEntriesArgs(server int, maxLogCount int) AppendEntriesArgs {
 	matchIndex := rf.matchIndex[server]
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -496,11 +513,14 @@ func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
 			args.PrevLogIndex = prevCommand.CommandIndex
 			args.PrevLogTerm = prevCommand.ReceiveTerm
 		}
-		DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, leaderLog=%v\n", rf.nextIndex[server], rf.id, server, rf.log)
-		args.Entries = rf.log[GenLogIdx(rf.nextIndex[server]):]
-		// 限制单次rpc数量
-		if len(args.Entries) > 8 {
-			args.Entries = args.Entries[0:8]
+		DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, maxLogCount=%d\n", rf.nextIndex[server], rf.id, server, maxLogCount)
+		if maxLogCount > 0 {
+			idx := GenLogIdx(rf.nextIndex[server])
+			if rf.nextIndex[server]+maxLogCount <= len(rf.log) {
+				args.Entries = rf.log[idx : idx+maxLogCount]
+			} else {
+				args.Entries = rf.log[idx:]
+			}
 		}
 	} else {
 		// 用于同步matchIndex和nextIndex
@@ -511,13 +531,13 @@ func (rf *Raft) genAppendEntriesArgs(server int) AppendEntriesArgs {
 	return args
 }
 
-func (rf *Raft) SendAppend(server int) {
+func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 	stop := time.NewTimer(RPCTimeOut * time.Millisecond)
 	for {
 		if rf.role != LEADER {
 			break
 		}
-		args := rf.genAppendEntriesArgs(server)
+		args := rf.genAppendEntriesArgs(server, maxAppendCount)
 		var reply AppendEntriesReply
 		successChan := make(chan bool, 1)
 		success := false
@@ -538,13 +558,17 @@ func (rf *Raft) SendAppend(server int) {
 		}
 		if !success {
 			DPrintf("leader=%d send appendEntries RPC to follower=%d fail\n", rf.id, server)
-			break
+			continue
 		} else if reply.Success {
 			// 成功并且有发送日志，则需要更新matchIndex和nextIndex
-			if len(args.Entries) != 0 {
+			if len(args.Entries) > 0 {
 				rf.matchIndex[server] = args.Entries[len(args.Entries)-1].CommandIndex
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 				DPrintf("leader=%d update follower=%d's match index to %d\n", rf.id, server, rf.matchIndex[server])
+				if args.Entries[len(args.Entries)-1].ReceiveTerm == rf.currentTerm {
+					rf.updateCommit()
+					rf.persist()
+				}
 			}
 			break
 			// 收到的回应任期比当前任期大，说明当前节点不是leader
@@ -552,10 +576,12 @@ func (rf *Raft) SendAppend(server int) {
 			rf.changeRole(FOLLOWER)
 			break
 		} else {
+			rf.nextIndex[server] = reply.NextIndex
+			rf.matchIndex[server] = reply.NextIndex - 1
 			// 日志非共识日志，寻找共识日志
-			rf.nextIndex[server]--
-			rf.matchIndex[server]--
-			DPrintf("no find follower=%d's match log\n", server)
+			//rf.nextIndex[server]--
+			//rf.matchIndex[server]--
+			DPrintf("no find follower=%d's match log, nextIndex=%d, matchIndex=%d\n", server, rf.nextIndex[server], rf.matchIndex[server])
 			// 完全没有共识日志时的停止点
 			if rf.nextIndex[server] == EmptyCmdIdx {
 				rf.nextIndex[server] = EmptyCmdIdx + 1
@@ -563,6 +589,9 @@ func (rf *Raft) SendAppend(server int) {
 				DPrintf("leader=%d sync match index from follower=%d fail\n", rf.id, server)
 				break
 			}
+			// fast send heart beat or fast sync log
+			//rf.heartBeatTimer[server].Stop()
+			//rf.heartBeatTimer[server].Reset(0)
 		}
 	}
 }
@@ -574,8 +603,8 @@ func (rf *Raft) updateCommitEntries(leaderCommit int) {
 	originCommitIndex := rf.commitIndex
 	rf.commitIndex = min(leaderCommit, lastIndex)
 	if originCommitIndex != rf.commitIndex {
-		DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d, log=%v\n",
-			rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex, rf.log)
+		DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d\n",
+			rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex)
 		if originCommitIndex != rf.commitIndex {
 			rf.applyLogAsyncNow()
 		}
@@ -586,7 +615,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 如果任期比当前的小，但是commitIndex比当前节点大，说明可能当前节点可能曾经失去过联系
-	if args.Term < rf.currentTerm && args.LeaderCommit <= rf.commitIndex {
+	//if args.Term < rf.currentTerm && args.LeaderCommit <= rf.commitIndex {
+	if args.Term < rf.currentTerm {
 		// 由于此处并不是leader发送的心跳，所以不用重置心跳超时定时器
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -605,25 +635,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	defer rf.persist()
 	if args.Entries == nil {
+		if args.PrevLogIndex == EmptyCmdIdx {
+			reply.Success = true
+			DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, myCommit=%d, time=%d\n",
+				rf.leader, rf.id, rf.currentTerm, rf.commitIndex, time.Now().UnixMilli())
+			return
+		}
 		logIndex := rf.lastLogIndex()
-		originIndex := logIndex
-		for args.PrevLogIndex < logIndex {
-			logIndex--
-		}
-		if originIndex-logIndex > 0 {
-			if logIndex == EmptyCmdIdx {
-				rf.log = []ApplyMsg{}
-			} else {
-				rf.log = rf.log[:logIndex]
-			}
-		}
-		term, logIndex := rf.lastLogTermIndex()
-		// 日志不同，需要做同步操作
-		if args.PrevLogTerm != term || args.PrevLogIndex != logIndex {
+		if logIndex < args.PrevLogIndex {
 			reply.Success = false
+			reply.NextIndex = logIndex + 1
+			return
+		}
+		msg := &rf.log[GenLogIdx(args.PrevLogIndex)]
+		if msg.ReceiveTerm != args.PrevLogTerm || msg.CommandIndex != args.PrevLogIndex {
+			reply.Success = false
+			reply.NextIndex = rf.commitIndex + 1
 			DPrintf("follower=%d's logs are diff from leader, need to sync\n", rf.id)
 			return
 		}
+		rf.log = rf.log[:args.PrevLogIndex]
 		reply.Success = true
 		// 更新已提交的条目
 		rf.updateCommitEntries(args.LeaderCommit)
@@ -635,7 +666,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if len(args.Entries) > 0 {
 		DPrintf("follower=%d will handle count=%d, curIndex=%d\n", rf.id, len(args.Entries), rf.lastLogIndex())
 	}
-	// 在follower提交时可能出现10比9先提交的情况，排查一下问题
 	if len(rf.log) == 0 {
 		if args.PrevLogTerm == EmptyCmdTerm && args.PrevLogIndex == EmptyCmdIdx {
 			rf.log = append(rf.log, args.Entries...)
@@ -643,26 +673,29 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.updateCommitEntries(args.LeaderCommit)
 		} else {
 			reply.Success = false
+			reply.NextIndex = 1
 		}
 		return
 	}
-	// TODO 似乎日志重复会返回false，解决这个问题
 	// 追加日志
 	prevLogIndex := args.PrevLogIndex
 	msg := rf.log[len(rf.log)-1]
 	if msg.CommandIndex < prevLogIndex {
 		// 这条消息对于当前节点来说过于超前
 		reply.Success = false
+		reply.NextIndex = rf.lastLogIndex() + 1
 		return
 	}
 	// 寻找index相同的日志，并检查是否为共识日志
-	index := len(rf.log) - 1
+	// TODO 当完成2D后应该使用被注释的部分
+	/*index := GenLogIdx(rf.log)
 	for ; index >= 0; index-- {
 		logMsg := rf.log[index]
 		if logMsg.CommandIndex == prevLogIndex {
 			break
 		}
-	}
+	}*/
+	index := GenLogIdx(args.PrevLogIndex)
 	if index == -1 {
 		// 找不到共识日志
 		rf.log = rf.log[:0]
@@ -675,7 +708,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	logMsg := rf.log[index]
 	if logMsg.ReceiveTerm != args.PrevLogTerm {
 		// 非共识日志
+		rf.log = rf.log[:index]
 		reply.Success = false
+		reply.NextIndex = index + 1
 	} else {
 		// 对非共识日志进行丢弃后再进行追加共识日志
 		rf.log = rf.log[:index+1]
@@ -725,7 +760,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			}
 			rf.matchIndex[rf.me] = index
 			rf.persist()
-			DPrintf("leader=%d receive one log, logIndex=%d, curTerm=%d,log=%v\n", rf.id, index, rf.currentTerm, rf.log)
+			DPrintf("leader=%d receive one log, logIndex=%d, curTerm=%d, log=%v\n", rf.id, index, rf.currentTerm, rf.log[len(rf.log)-1])
 		}
 	}
 	return index, term, isLeader
@@ -759,23 +794,25 @@ func (rf *Raft) fastNotifyLeaderChangeAndRegisterHeartBeat() {
 		go func(server int) {
 			pass := make(chan bool, 1)
 			go func() {
-				rf.SendAppend(server)
+				beforeNext := rf.nextIndex[server]
+				rf.SendAppend(server, 0)
+				// 快速同步
+				for !rf.killed() && beforeNext > rf.nextIndex[server] && rf.role == LEADER {
+					beforeNext = rf.nextIndex[server]
+					rf.SendAppend(server, 0)
+				}
 				pass <- true
 			}()
-			stop := time.NewTimer(RPCTimeOut * time.Millisecond)
 			select {
 			case <-pass:
-			case <-stop.C:
 			}
 			rf.heartBeatTimer[server].Stop()
 			rf.heartBeatTimer[server].Reset(OneHeartBeatLag * time.Millisecond)
 			go func(index int) {
-				for rf.role == LEADER {
+				for !rf.killed() && rf.role == LEADER {
 					select {
 					case <-rf.heartBeatTimer[index].C:
-						{
-							rf.SendAppend(index)
-						}
+						rf.SendAppend(index, len(rf.log))
 					}
 					rf.heartBeatTimer[index].Stop()
 					rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
@@ -929,9 +966,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
+	// 在这里初始化，防止其他地方调用AsyncNow时，applyLogTimer未初始化
+	rf.applyLogTimer = time.NewTimer(0)
 	// 注册日志应用到状态机的任务
 	go func() {
-		rf.applyLogTimer = time.NewTimer(0)
+		//rf.applyLogTimer = time.NewTimer(0)
 		for {
 			select {
 			case <-rf.applyLogTimer.C:
