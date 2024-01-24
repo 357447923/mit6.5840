@@ -1146,7 +1146,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		}
 
 		if cfg.LogSize() >= MAXLOGSIZE {
-			cfg.t.Fatalf("Log size too large")
+			cfg.t.Fatalf("Log size too large. size=%d", cfg.LogSize())
 		}
 		if disconnect {
 			// reconnect a follower, who maybe behind and
@@ -1186,9 +1186,9 @@ func TestSnapshotInstallUnCrash2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)", false, false, true)
 }
 
-// do the servers persist the snapshots, and
-// restart using snapshot along with the
-// tail of the log?
+// // do the servers persist the snapshots, and
+// // restart using snapshot along with the
+// // tail of the log?
 func TestSnapshotAllCrash2D(t *testing.T) {
 	servers := 3
 	iters := 5
@@ -1227,8 +1227,8 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 	cfg.end()
 }
 
-// do servers correctly initialize their in-memory copy of the snapshot, making
-// sure that future writes to persistent state don't lose state?
+// // do servers correctly initialize their in-memory copy of the snapshot, making
+// // sure that future writes to persistent state don't lose state?
 func TestSnapshotInit2D(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, true)

@@ -100,9 +100,12 @@ type Raft struct {
 	applyLogTimer      *time.Timer
 
 	// exists stably in all server as follows（持久数据）
-	currentTerm int        // last Term of server knowing
-	voteFor     int        // 当前任期内收到选票的Candidate id（没有就为-1）
-	log         []ApplyMsg // 每个条目包含状态机的要执行命令和从 Leader 处收到时的任期号, 0这个位置可能要丢弃
+	currentTerm   int          // last Term of server knowing
+	voteFor       int          // 当前任期内收到选票的Candidate id（没有就为-1）
+	snapshotMutex sync.RWMutex // 当前是否正在更新snapshot，应该作为原子变量使用
+	debug         int32
+	snapshot      []*ApplyMsg // 1号用于更新，0号用于使用
+	log           []ApplyMsg  // 每个条目包含状态机的要执行命令和从 Leader 处收到时的任期号, 0这个位置可能要丢弃
 
 	// exists unstably in all server as follows(非持久数据)
 	commitIndex int // 已知的被提交的最大日志条目的索引值（从0开始递增）
@@ -173,6 +176,13 @@ func randomElectTimeOut() time.Duration {
 	return time.Duration(BaseElectTimeOut+rand.Int63()%BaseElectTimeOut) * time.Millisecond
 }
 
+func snapshotInit(snapshot *ApplyMsg, valid bool, term int, index int, data []byte) {
+	snapshot.SnapshotValid = valid
+	snapshot.SnapshotTerm = term
+	snapshot.SnapshotIndex = index
+	snapshot.Snapshot = data
+}
+
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
@@ -189,25 +199,32 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
+	labgob.Register(ApplyMsg{})
 	buf := new(bytes.Buffer)
 	e := labgob.NewEncoder(buf)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.voteFor)
 	e.Encode(rf.commitIndex)
-	// TODO 2D:需要把上一次快照的位置进行持久化
 	e.Encode(rf.log)
 	raftState := buf.Bytes()
-	rf.persister.Save(raftState, nil)
+
+	buf = new(bytes.Buffer)
+	e = labgob.NewEncoder(buf)
+	e.Encode(rf.snapshot[0].SnapshotIndex)
+	snapshot := []interface{}{*rf.snapshot[0]}
+	e.Encode(snapshot)
+	snapState := buf.Bytes()
+	rf.persister.Save(raftState, snapState)
 }
 
 // restore previously persisted state.
-func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+func (rf *Raft) readPersist(raftState []byte, snapState []byte) {
+	if raftState == nil || len(raftState) < 1 { // bootstrap without any state?
 		return
 	}
 	// Your code here (2C).
 	// Example:
-	r := bytes.NewBuffer(data)
+	r := bytes.NewBuffer(raftState)
 	d := labgob.NewDecoder(r)
 	var currentTerm int
 	var voteFor int
@@ -224,8 +241,32 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.voteFor = voteFor
 		rf.commitIndex = commitIndex
 		rf.log = log
-		DPrintf("server=%d read data success! term=%d, voteFor=%d, commitIndex=%d\n", rf.id, rf.currentTerm, rf.voteFor, rf.commitIndex)
 	}
+	if snapState == nil || len(snapState) < 1 {
+		return
+	}
+	r = bytes.NewBuffer(snapState)
+	d = labgob.NewDecoder(r)
+	DPrintf("snapshot len=%d", len(snapState))
+	var lastLogIndex int
+	var data []interface{}
+	if d.Decode(&lastLogIndex) != nil ||
+		d.Decode(&data) != nil {
+		DPrintf("server=%d read snapshot data error\n", rf.id)
+	} else {
+		snapshot := data[0].(ApplyMsg)
+		snapshotInit(rf.snapshot[0], snapshot.SnapshotValid, snapshot.SnapshotTerm, snapshot.SnapshotIndex, snapshot.Snapshot)
+	}
+}
+
+func (rf *Raft) rLock() {
+	rf.snapshotMutex.RLock()
+	atomic.CompareAndSwapInt32(&rf.debug, rf.debug, rf.debug+1)
+}
+
+func (rf *Raft) rUnLock() {
+	rf.snapshotMutex.RUnlock()
+	atomic.CompareAndSwapInt32(&rf.debug, rf.debug, rf.debug-1)
 }
 
 // the service says it has created a snapshot that has
@@ -234,7 +275,102 @@ func (rf *Raft) readPersist(data []byte) {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	// 是可以让Follower进行创建快照的，因为快照中的内容必须是已经提交的
+	if rf.snapshot[0].SnapshotValid && index < rf.snapshot[0].SnapshotIndex || rf.commitIndex < index {
+		return
+	}
 
+	DPrintf("server=%d调用Snapshot, index=%d\n", rf.id, index)
+	rf.snapshotMutex.Lock()
+	defer rf.snapshotMutex.Unlock()
+	snapshotLastIndexInLog := rf.GenLogIdx(index)
+	msg := rf.log[snapshotLastIndexInLog]
+	rf.snapshot[0].SnapshotValid = true
+	rf.snapshot[0].SnapshotIndex = index
+	rf.snapshot[0].SnapshotTerm = msg.ReceiveTerm
+	rf.snapshot[0].Snapshot = snapshot
+	rf.log = rf.log[snapshotLastIndexInLog+1:]
+	rf.mu.Lock()
+	rf.persist()
+	rf.mu.Unlock()
+	DPrintf("server=%d snapshot build success. logLen=%d\n", rf.id, len(rf.log))
+}
+
+type InstallSnapshotArgs struct {
+	Term              int    // Leader的任期
+	LeaderId          int    // 为了Follower能重定向到客户端
+	LastIncludedIndex int    // 快照中包含的最后日志条目的索引值
+	LastIncludeTerm   int    // 快照中包含的最后日志条目的任期号
+	Offset            int    // 分块在快照中的偏移量, 便于快照分多次进行传输
+	Data              []byte // 快照块的原始数据
+	Done              bool   // 如果是最后一块数据则为 true, 与Offset搭配使用
+}
+
+type InstallSnapshotReply struct {
+	Term int // currentTerm，用于 Leader 更新自己的任期
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	reply.Term = rf.currentTerm
+	rf.resetWaitHeartBeatTimer()
+	if args.Term < rf.currentTerm {
+		return
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm {
+		return
+	}
+	DPrintf("follower=%d install snapshot, term=%d, index=%d, offset=%d, done=%v\n"+
+		"follower=%d current snapshot len=%d\n", rf.id, args.LastIncludeTerm, args.LastIncludedIndex, args.Offset,
+		args.Done, rf.id, len(rf.snapshot[0].Snapshot))
+	if args.Offset == 0 {
+		rf.snapshot[1].Snapshot = args.Data
+	} else {
+		curIndex := len(rf.snapshot[1].Snapshot)
+		// 处理因为延迟而没有收到的数据块
+		if args.Offset >= curIndex {
+			for args.Offset > curIndex {
+				rf.snapshot[1].Snapshot = append(rf.snapshot[1].Snapshot, 0)
+				curIndex++
+			}
+			rf.snapshot[1].Snapshot = append(rf.snapshot[1].Snapshot, args.Data...)
+		} else {
+			// 处理延迟收到的数据块
+			for offset, i := args.Offset, 0; i < len(args.Data); i++ {
+				rf.snapshot[1].Snapshot[offset] = args.Data[i]
+				offset++
+			}
+		}
+	}
+	if !args.Done {
+		return
+	}
+
+	rf.snapshotMutex.Lock()
+	defer func() {
+		rf.persist()
+		rf.snapshotMutex.Unlock()
+	}()
+	lastRemoveIdx := rf.GenLogIdx(args.LastIncludedIndex)
+	// 完成接收到的快照的最终初始化
+	rf.snapshot[1].SnapshotTerm = args.LastIncludeTerm
+	rf.snapshot[1].SnapshotIndex = args.LastIncludedIndex
+	rf.snapshot[1].SnapshotValid = true
+	// 把原快照丢弃
+	snapshotInit(rf.snapshot[0], false, 0, 0, make([]byte, 0))
+	// 把新快照投入使用
+	tmp := rf.snapshot[0]
+	rf.snapshot[0] = rf.snapshot[1]
+	rf.snapshot[1] = tmp
+	// TODO 进行日志丢弃
+	if len(rf.log) <= lastRemoveIdx+1 ||
+		(rf.log[lastRemoveIdx].CommandIndex == args.LastIncludedIndex &&
+			rf.log[lastRemoveIdx].ReceiveTerm == args.LastIncludeTerm) {
+		rf.log = rf.log[:0]
+	} else {
+		rf.log = rf.log[lastRemoveIdx+1:]
+	}
 }
 
 // example RequestVote RPC arguments structure.
@@ -352,18 +488,20 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) lastLogIndex() int {
-	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
-	if len(rf.log) == 0 {
+	if !rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
 		return EmptyCmdIdx
+	} else if rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
+		return rf.snapshot[0].SnapshotIndex
 	} else {
 		return rf.log[len(rf.log)-1].CommandIndex
 	}
 }
 
 func (rf *Raft) lastLogTerm() int {
-	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
-	if len(rf.log) == 0 {
+	if !rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
 		return EmptyCmdTerm
+	} else if rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
+		return rf.snapshot[0].SnapshotTerm
 	} else {
 		return rf.log[len(rf.log)-1].ReceiveTerm
 	}
@@ -371,13 +509,15 @@ func (rf *Raft) lastLogTerm() int {
 
 func (rf *Raft) lastLogTermIndex() (prevLogTerm int, prevLogIndex int) {
 	// 集群刚启动时就是没有日志的
-	// TODO 2D时要考虑可能是更新了快照导致日志长度为0
-	if len(rf.log) == 0 {
+	if !rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
 		prevLogIndex = EmptyCmdIdx
 		prevLogTerm = EmptyCmdTerm
+	} else if rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
+		prevLogIndex = rf.snapshot[0].SnapshotIndex
+		prevLogTerm = rf.snapshot[0].SnapshotTerm
 	} else {
 		prevLogIndex = rf.log[len(rf.log)-1].CommandIndex
-		prevLogTerm = rf.log[GenLogIdx(prevLogIndex)].ReceiveTerm
+		prevLogTerm = rf.log[rf.GenLogIdx(prevLogIndex)].ReceiveTerm
 	}
 	return
 }
@@ -500,22 +640,31 @@ func (rf *Raft) genAppendEntriesArgs(server int, maxLogCount int) AppendEntriesA
 		LeaderId:     rf.id,
 		LeaderCommit: rf.commitIndex,
 	}
-	// TODO 当做到快照的时候需要修改
-	if len(rf.log) == 0 {
+	if !rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
 		args.Entries = nil
 		args.PrevLogTerm, args.PrevLogIndex = EmptyCmdTerm, EmptyCmdIdx
-	} else if len(rf.log) >= rf.nextIndex[server] {
+	} else if rf.snapshot[0].SnapshotValid && len(rf.log) == 0 {
+		args.Entries = nil
+		args.PrevLogTerm, args.PrevLogIndex = rf.snapshot[0].SnapshotTerm, rf.snapshot[0].SnapshotIndex
+	} else if rf.lastLogIndex() >= rf.nextIndex[server] {
 		if matchIndex == EmptyCmdIdx {
 			DPrintf("follower=%d's match index=0 in leader=%d's list\n", server, rf.id)
 			args.PrevLogTerm, args.PrevLogIndex = EmptyCmdTerm, EmptyCmdIdx
 		} else {
-			prevCommand := rf.log[GenLogIdx(matchIndex)]
-			args.PrevLogIndex = prevCommand.CommandIndex
-			args.PrevLogTerm = prevCommand.ReceiveTerm
+			if rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex == matchIndex {
+				args.PrevLogIndex = rf.snapshot[0].SnapshotIndex
+				args.PrevLogTerm = rf.snapshot[0].SnapshotTerm
+			} else if rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex > matchIndex {
+				panic("matchIndex=" + strconv.Itoa(matchIndex) + "< snapshotIdx=" + strconv.Itoa(rf.snapshot[0].SnapshotIndex) + ", cannot build append args\n")
+			} else {
+				prevCommand := rf.log[rf.GenLogIdx(matchIndex)]
+				args.PrevLogIndex = prevCommand.CommandIndex
+				args.PrevLogTerm = prevCommand.ReceiveTerm
+			}
 		}
 		DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, maxLogCount=%d\n", rf.nextIndex[server], rf.id, server, maxLogCount)
 		if maxLogCount > 0 {
-			idx := GenLogIdx(rf.nextIndex[server])
+			idx := rf.GenLogIdx(rf.nextIndex[server])
 			if rf.nextIndex[server]+maxLogCount <= len(rf.log) {
 				args.Entries = rf.log[idx : idx+maxLogCount]
 			} else {
@@ -550,15 +699,14 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 		}()
 		select {
 		case <-stop.C:
-			{
-				break
-			}
+			break
 		case success = <-successChan:
 			break
 		}
 		if !success {
 			DPrintf("leader=%d send appendEntries RPC to follower=%d fail\n", rf.id, server)
-			continue
+			//continue
+			break
 		} else if reply.Success {
 			// 成功并且有发送日志，则需要更新matchIndex和nextIndex
 			if len(args.Entries) > 0 {
@@ -566,8 +714,10 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 				DPrintf("leader=%d update follower=%d's match index to %d\n", rf.id, server, rf.matchIndex[server])
 				if args.Entries[len(args.Entries)-1].ReceiveTerm == rf.currentTerm {
+					rf.mu.Lock()
 					rf.updateCommit()
 					rf.persist()
+					rf.mu.Unlock()
 				}
 			}
 			break
@@ -578,21 +728,62 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 		} else {
 			rf.nextIndex[server] = reply.NextIndex
 			rf.matchIndex[server] = reply.NextIndex - 1
-			// 日志非共识日志，寻找共识日志
-			//rf.nextIndex[server]--
-			//rf.matchIndex[server]--
 			DPrintf("no find follower=%d's match log, nextIndex=%d, matchIndex=%d\n", server, rf.nextIndex[server], rf.matchIndex[server])
 			// 完全没有共识日志时的停止点
 			if rf.nextIndex[server] == EmptyCmdIdx {
 				rf.nextIndex[server] = EmptyCmdIdx + 1
 				rf.matchIndex[server] = EmptyCmdIdx
 				DPrintf("leader=%d sync match index from follower=%d fail\n", rf.id, server)
+			} else if rf.snapshot[0].SnapshotIndex >= reply.NextIndex {
+				rf.SendInstallSnapshot(server)
 				break
 			}
-			// fast send heart beat or fast sync log
-			//rf.heartBeatTimer[server].Stop()
-			//rf.heartBeatTimer[server].Reset(0)
+			// 快速同步
+			continue
 		}
+	}
+}
+
+func (rf *Raft) SendInstallSnapshot(server int) {
+	stop := time.NewTimer(RPCTimeOut * time.Millisecond)
+	for {
+		if rf.role != LEADER {
+			break
+		}
+		successChan := make(chan bool, 1)
+		// TODO 考虑分成多次传输，防止心跳超时
+		lastIncludedIndex, lastIncludeTerm := rf.snapshot[0].SnapshotIndex, rf.snapshot[0].SnapshotTerm
+		args := InstallSnapshotArgs{
+			Term:              rf.currentTerm,
+			LeaderId:          rf.id,
+			LastIncludedIndex: lastIncludedIndex,
+			LastIncludeTerm:   lastIncludeTerm,
+			Offset:            0,
+			Data:              rf.snapshot[0].Snapshot,
+			Done:              true,
+		}
+		var reply InstallSnapshotReply
+		go func() {
+			DPrintf("leader=%d发送快照to follower=%d\n", rf.id, server)
+			res := rf.peers[server].Call("Raft.InstallSnapshot", &args, &reply)
+			successChan <- res
+		}()
+		stop.Stop()
+		stop.Reset(RPCTimeOut * time.Millisecond)
+		success := false
+		select {
+		case <-stop.C:
+		case success = <-successChan:
+		}
+		if !success {
+			DPrintf("leader=%d send installSnapshot RPC to follower=%d fail\n", rf.id, server)
+		} else if reply.Term > rf.currentTerm {
+			rf.changeRole(FOLLOWER)
+		} else {
+			rf.nextIndex[server] = lastIncludedIndex + 1
+			rf.matchIndex[server] = lastIncludedIndex
+		}
+		break
 	}
 }
 
@@ -603,12 +794,27 @@ func (rf *Raft) updateCommitEntries(leaderCommit int) {
 	originCommitIndex := rf.commitIndex
 	rf.commitIndex = min(leaderCommit, lastIndex)
 	if originCommitIndex != rf.commitIndex {
-		DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d\n",
-			rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex)
+		DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d, log=%v\n",
+			rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex, rf.log)
 		if originCommitIndex != rf.commitIndex {
 			rf.applyLogAsyncNow()
 		}
 	}
+}
+
+func (rf *Raft) findLastTermLogIdx(cmdIdx int) int {
+	idx := rf.GenLogIdx(cmdIdx)
+	if idx == -1 {
+		return -1
+	}
+	term := rf.log[idx].ReceiveTerm
+	ans := cmdIdx - 1
+	for ; ans > rf.commitIndex || (rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex < ans); ans-- {
+		if rf.log[rf.GenLogIdx(ans)].ReceiveTerm < term {
+			break
+		}
+	}
+	return ans
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -633,7 +839,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
 	rf.leader = args.LeaderId
 	reply.Term = rf.currentTerm
-	defer rf.persist()
+	rf.snapshotMutex.RLock()
+	defer func() {
+		rf.persist()
+		rf.snapshotMutex.RUnlock()
+	}()
 	if args.Entries == nil {
 		if args.PrevLogIndex == EmptyCmdIdx {
 			reply.Success = true
@@ -646,15 +856,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.Success = false
 			reply.NextIndex = logIndex + 1
 			return
+		} else if rf.snapshot[0].SnapshotValid && logIndex == rf.snapshot[0].SnapshotIndex {
+			reply.Success = true
+			rf.updateCommitEntries(args.LeaderCommit)
+			return
+		} else if rf.snapshot[0].SnapshotValid && args.PrevLogIndex == rf.snapshot[0].SnapshotIndex {
+			reply.Success = false
+			reply.NextIndex = args.PrevLogIndex + 1
+			return
 		}
-		msg := &rf.log[GenLogIdx(args.PrevLogIndex)]
+		msg := &rf.log[rf.GenLogIdx(args.PrevLogIndex)]
 		if msg.ReceiveTerm != args.PrevLogTerm || msg.CommandIndex != args.PrevLogIndex {
 			reply.Success = false
 			reply.NextIndex = rf.commitIndex + 1
 			DPrintf("follower=%d's logs are diff from leader, need to sync\n", rf.id)
 			return
 		}
-		rf.log = rf.log[:args.PrevLogIndex]
+		rf.log = rf.log[:rf.GenLogIdx(args.PrevLogIndex)+1]
 		reply.Success = true
 		// 更新已提交的条目
 		rf.updateCommitEntries(args.LeaderCommit)
@@ -667,7 +885,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		DPrintf("follower=%d will handle count=%d, curIndex=%d\n", rf.id, len(args.Entries), rf.lastLogIndex())
 	}
 	if len(rf.log) == 0 {
-		if args.PrevLogTerm == EmptyCmdTerm && args.PrevLogIndex == EmptyCmdIdx {
+		if rf.snapshot[0].SnapshotValid && args.PrevLogIndex == rf.snapshot[0].SnapshotIndex && args.PrevLogTerm == rf.snapshot[0].SnapshotTerm {
+			rf.log = append(rf.log, args.Entries...)
+			reply.Success = true
+			rf.updateCommitEntries(args.LeaderCommit)
+		} else if !rf.snapshot[0].SnapshotValid && args.PrevLogTerm == EmptyCmdTerm && args.PrevLogIndex == EmptyCmdIdx {
 			rf.log = append(rf.log, args.Entries...)
 			reply.Success = true
 			rf.updateCommitEntries(args.LeaderCommit)
@@ -679,23 +901,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	// 追加日志
 	prevLogIndex := args.PrevLogIndex
-	msg := rf.log[len(rf.log)-1]
-	if msg.CommandIndex < prevLogIndex {
+	if rf.lastLogIndex() < prevLogIndex {
 		// 这条消息对于当前节点来说过于超前
 		reply.Success = false
-		reply.NextIndex = rf.lastLogIndex() + 1
+		reply.NextIndex = rf.findLastTermLogIdx(rf.lastLogIndex()) + 1
+		DPrintf("日志对于follower=%d过于超前\n", rf.id)
 		return
 	}
 	// 寻找index相同的日志，并检查是否为共识日志
-	// TODO 当完成2D后应该使用被注释的部分
-	/*index := GenLogIdx(rf.log)
-	for ; index >= 0; index-- {
-		logMsg := rf.log[index]
-		if logMsg.CommandIndex == prevLogIndex {
-			break
-		}
-	}*/
-	index := GenLogIdx(args.PrevLogIndex)
+	index := rf.GenLogIdx(args.PrevLogIndex)
 	if index == -1 {
 		// 找不到共识日志
 		rf.log = rf.log[:0]
@@ -710,7 +924,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 非共识日志
 		rf.log = rf.log[:index]
 		reply.Success = false
-		reply.NextIndex = index + 1
+		reply.NextIndex = index
 	} else {
 		// 对非共识日志进行丢弃后再进行追加共识日志
 		rf.log = rf.log[:index+1]
@@ -792,31 +1006,37 @@ func (rf *Raft) fastNotifyLeaderChangeAndRegisterHeartBeat() {
 		}
 		// 采取的心跳注册策略为通知leader变更后，再进行注册心跳
 		go func(server int) {
-			pass := make(chan bool, 1)
-			go func() {
-				beforeNext := rf.nextIndex[server]
-				rf.SendAppend(server, 0)
-				// 快速同步
-				for !rf.killed() && beforeNext > rf.nextIndex[server] && rf.role == LEADER {
-					beforeNext = rf.nextIndex[server]
-					rf.SendAppend(server, 0)
-				}
-				pass <- true
-			}()
-			select {
-			case <-pass:
-			}
+			//pass := make(chan bool, 1)
+			//go func() {
+			//	beforeNext := rf.nextIndex[server]
+			//	rf.SendAppend(server, 0)
+			//	// 快速同步
+			//	for !rf.killed() && beforeNext > rf.nextIndex[server] && rf.role == LEADER {
+			//		beforeNext = rf.nextIndex[server]
+			//		rf.SendAppend(server, 0)
+			//	}
+			//	pass <- true
+			//}()
+			//select {
+			//case <-pass:
+			//}
+			rf.SendAppend(server, 0)
 			rf.heartBeatTimer[server].Stop()
 			rf.heartBeatTimer[server].Reset(OneHeartBeatLag * time.Millisecond)
 			go func(index int) {
 				for !rf.killed() && rf.role == LEADER {
 					select {
 					case <-rf.heartBeatTimer[index].C:
-						rf.SendAppend(index, len(rf.log))
+						rf.snapshotMutex.RLock()
+						if rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex >= rf.nextIndex[index] {
+							rf.SendInstallSnapshot(index)
+						} else {
+							rf.SendAppend(index, len(rf.log))
+						}
+						rf.snapshotMutex.RUnlock()
 					}
 					rf.heartBeatTimer[index].Stop()
 					rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
-					//DPrintf("leader对%d的心跳定时器重置成功, time=%d\n", index, time.Now().UnixMilli())
 				}
 				rf.heartBeatTimer[index].Stop()
 			}(server)
@@ -824,40 +1044,19 @@ func (rf *Raft) fastNotifyLeaderChangeAndRegisterHeartBeat() {
 	}
 }
 
-func (rf *Raft) registerUpdateLeaderCommit() {
-	if rf.commitUpdateTimer == nil {
-		rf.commitUpdateTimer = time.NewTimer(UpdateCommitLag * time.Millisecond)
-	} else {
-		rf.commitUpdateTimer.Stop()
-		rf.commitUpdateTimer.Reset(UpdateCommitLag * time.Millisecond)
-	}
-
-	go func() {
-		for rf.role == LEADER {
-			select {
-			case <-rf.commitUpdateTimer.C:
-				{
-					rf.updateCommit()
-					rf.persist()
-				}
-			}
-			rf.commitUpdateTimer.Stop()
-			rf.commitUpdateTimer.Reset(OneHeartBeatLag * time.Millisecond)
-		}
-		rf.commitUpdateTimer.Stop()
-	}()
-}
-
 func (rf *Raft) updateCommit() {
-	// TODO 2D做快照后，这里都得修改
 	if rf.lastLogIndex() > rf.commitIndex {
 		originCommitIndex := rf.commitIndex
-		for i := rf.commitIndex + 1; i <= rf.lastLogIndex(); i++ {
+		i := rf.commitIndex + 1
+		if rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex > i {
+			i = rf.snapshot[0].SnapshotIndex + 1
+		}
+		for ; i <= rf.lastLogIndex(); i++ {
 			// 如raft论文所讲，非当前任期的日志，不能由当前的leader进行commit，而是通过提交当前任期的日志来进行间接的提交
 			// 但这种做法是有问题的，例如: 宕机后选举出leader后任期就不同了，然后这条日志之后也没有新日志的加入，就会导致永远不会被提交
 			// 因为永远不会被提交，所以也不会被状态机应用
 			// 解决这个问题可以研究一下no-op，在6.824中并不讨论这个问题
-			if rf.log[GenLogIdx(i)].ReceiveTerm != rf.currentTerm {
+			if rf.log[rf.GenLogIdx(i)].ReceiveTerm != rf.currentTerm {
 				continue
 			}
 			receive := 0
@@ -947,12 +1146,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteFor = VoteForInvalid
 	rf.id = me
 	rf.log = []ApplyMsg{}
+	rf.snapshot = make([]*ApplyMsg, 2)
+	for i := range rf.snapshot {
+		rf.snapshot[i] = new(ApplyMsg)
+		snapshotInit(rf.snapshot[i], false, EmptyCmdTerm, EmptyCmdIdx, nil)
+	}
 	rf.applyCh = applyCh
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.currentTerm = 0
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(persister.ReadRaftState(), persister.ReadSnapshot())
 
 	rf.waitHeartBeatTimer = time.NewTimer(time.Duration(HeartBeatTimeOut+rand.Int63()%100) * time.Millisecond)
 	rf.electionTimer = time.NewTimer(randomElectTimeOut())
@@ -970,26 +1174,35 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyLogTimer = time.NewTimer(0)
 	// 注册日志应用到状态机的任务
 	go func() {
-		//rf.applyLogTimer = time.NewTimer(0)
 		for {
 			select {
 			case <-rf.applyLogTimer.C:
-				{
-					originApply := rf.lastApplied
-					for rf.lastApplied < rf.commitIndex {
-						rf.lastApplied++
-						rf.applyCh <- rf.log[GenLogIdx(rf.lastApplied)]
-						DPrintf("server=%d apply log=%v \n", rf.id, rf.log[GenLogIdx(rf.lastApplied)])
-					}
-					if rf.lastApplied > originApply {
-						if rf.role == LEADER {
-							DPrintf("leader=%d refresh commit success, apply log from index=%d to index=%d, rf.matchIndex=%v\n",
-								rf.id, originApply, rf.lastApplied, rf.matchIndex)
-						} else {
-							DPrintf("follower=%d refresh commit success, apply log from index=%d to index=%d\n", rf.id, originApply, rf.lastApplied)
-						}
-					}
+				//DPrintf("server=%d start to apply log. lastApply=%d, commitIndex=%d\n", rf.id, rf.lastApplied, rf.commitIndex)
+				//originApply := rf.lastApplied
+				rf.snapshotMutex.RLock()
+				// 先将快照进行apply
+				if rf.snapshot[0].SnapshotValid && rf.lastApplied < rf.snapshot[0].SnapshotIndex {
+					rf.applyCh <- *rf.snapshot[0]
+					rf.lastApplied = rf.snapshot[0].SnapshotIndex
+					DPrintf("server=%d apply snapshot, index=%d, term=%d\n", rf.id, rf.snapshot[0].SnapshotIndex, rf.snapshot[0].SnapshotTerm)
 				}
+				// 对非快照进行apply
+				for rf.lastApplied < rf.commitIndex {
+					rf.lastApplied++
+					applyIdx := rf.GenLogIdx(rf.lastApplied)
+					rf.applyCh <- rf.log[applyIdx]
+					DPrintf("server=%d apply log=%v\n", rf.id, rf.log[applyIdx])
+				}
+				rf.snapshotMutex.RUnlock()
+				//DPrintf("server=%d finish apply log. lastApply=%d, commitIndex=%d\n", rf.id, rf.lastApplied, rf.commitIndex)
+				//if rf.lastApplied > originApply {
+				//	if rf.role == LEADER {
+				//		DPrintf("leader=%d refresh commit success, apply log from index=%d to index=%d, rf.matchIndex=%v\n",
+				//			rf.id, originApply, rf.lastApplied, rf.matchIndex)
+				//	} else {
+				//		DPrintf("follower=%d refresh commit success, apply log from index=%d to index=%d\n", rf.id, originApply, rf.lastApplied)
+				//	}
+				//}
 			}
 			rf.applyLogTimer.Stop()
 			rf.applyLogTimer.Reset(ApplyLogLag * time.Millisecond)

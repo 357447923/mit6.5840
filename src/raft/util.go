@@ -8,7 +8,7 @@ import (
 )
 
 // Debugging
-const Debug = false
+const Debug = true
 
 type logTopic string
 
@@ -51,7 +51,15 @@ func DPrintf(format string, a ...interface{}) (n int) {
 	return
 }
 
-func GenLogIdx(cmdIdx int) (logIdx int) {
-	logIdx = cmdIdx - 1
+func (rf *Raft) GenLogIdx(cmdIdx int) (logIdx int) {
+	if rf.snapshot[0].SnapshotValid {
+		logIdx = cmdIdx - rf.snapshot[0].SnapshotIndex - 1
+	} else {
+		logIdx = cmdIdx - 1
+	}
+	if logIdx < 0 {
+		DPrintf("server=%d gen idx=%d, cmdIdx=%d, rf.snapshot valid=%v, index=%d, term=%d\n",
+			rf.id, logIdx, cmdIdx, rf.snapshot[0].SnapshotValid, rf.snapshot[0].SnapshotIndex, rf.snapshot[0].SnapshotTerm)
+	}
 	return
 }
