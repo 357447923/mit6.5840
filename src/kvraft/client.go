@@ -1,13 +1,21 @@
 package kvraft
 
-import "6.5840/labrpc"
+import (
+	"6.5840/labrpc"
+	"log"
+	"strconv"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
 
+const ChangeLeaderInterval = 20 * time.Millisecond
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	clientId int64
+	leaderId int // leaderEntry cache
 }
 
 func nrand() int64 {
@@ -21,6 +29,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.clientId = nrand()
 	return ck
 }
 
@@ -35,9 +44,44 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-
+	args := GetArgs{
+		ClientId: ck.clientId,
+		Key:      key,
+	}
 	// You will have to modify this function.
-	return ""
+	leaderId := ck.leaderId
+	for {
+		var reply GetReply
+		DPrintf("client=%v requesting server=%d\n", ck.clientId, leaderId)
+		ok := ck.servers[leaderId].Call("KVServer.Get", &args, &reply)
+		if !ok {
+			DPrintf("client=%v req server=%d not ok\n", ck.clientId, leaderId)
+		} else if reply.Err != OK {
+			DPrintf("client=%v req server=%d err=%v\n", ck.clientId, leaderId, reply.Err)
+		}
+		if !ok {
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+		switch reply.Err {
+		case OK:
+			ck.leaderId = leaderId
+			return reply.Value
+		case ErrNoKey:
+			ck.leaderId = leaderId
+			DPrintf("client=%v get key=%s err=%v\n", ck.clientId, key, ErrNoKey)
+			return ""
+		case ErrTimeOut:
+			continue
+		case ErrWrongLeader:
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		default:
+			time.Sleep(ChangeLeaderInterval)
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+	}
 }
 
 // shared by Put and Append.
@@ -49,7 +93,49 @@ func (ck *Clerk) Get(key string) string {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	start := time.Now().UnixMilli()
+	defer func(start int64) {
+		DPrintf("client=%d req success. cost=%vms\n", ck.clientId, time.Now().UnixMilli()-start)
+	}(start)
 	// You will have to modify this function.
+	args := PutAppendArgs{
+		ClientId: ck.clientId,
+		Key:      key,
+		Value:    value,
+		Op:       op,
+	}
+	leaderId := ck.leaderId
+	for {
+		var reply PutAppendReply
+		DPrintf("client=%v requesting server=%d\n", ck.clientId, leaderId)
+		ok := ck.servers[leaderId].Call("KVServer.PutAppend", &args, &reply)
+		if !ok {
+			DPrintf("client=%v req server=%d not ok\n", ck.clientId, leaderId)
+		} else if reply.Err != OK {
+			DPrintf("client=%v req server=%d err=%v\n", ck.clientId, leaderId, reply.Err)
+		}
+		if !ok {
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		}
+
+		switch reply.Err {
+		case OK:
+			DPrintf("client=%v put append {\"%s\":\"%s\"} success\n", ck.clientId, key, value)
+			ck.leaderId = leaderId
+			return
+		case ErrNoKey:
+			log.Fatal("client" + strconv.Itoa(int(ck.clientId)) + "putappend get err nokey\n")
+		case ErrWrongLeader:
+			time.Sleep(ChangeLeaderInterval)
+			leaderId = (leaderId + 1) % len(ck.servers)
+			continue
+		case ErrTimeOut:
+			continue
+		default:
+			log.Fatal("client unknown err", reply.Err)
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
