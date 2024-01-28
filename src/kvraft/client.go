@@ -9,7 +9,10 @@ import (
 import "crypto/rand"
 import "math/big"
 
-const ChangeLeaderInterval = 20 * time.Millisecond
+const (
+	ChangeLeaderInterval = 20 * time.Millisecond
+	RequestTimeOut       = 500 * time.Millisecond
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -46,14 +49,26 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{
 		ClientId: ck.clientId,
+		ReqId:    nrand(),
 		Key:      key,
 	}
 	// You will have to modify this function.
 	leaderId := ck.leaderId
 	for {
-		var reply GetReply
-		DPrintf("client=%v requesting server=%d\n", ck.clientId, leaderId)
-		ok := ck.servers[leaderId].Call("KVServer.Get", &args, &reply)
+		reply := GetReply{}
+		ok := false
+		success := make(chan bool)
+		go func() {
+			hasRecv := ck.servers[leaderId].Call("KVServer.Get", &args, &reply)
+			success <- hasRecv
+		}()
+		stop := time.NewTimer(RequestTimeOut)
+		select {
+		case <-stop.C:
+			reply.Err = ErrTimeOut
+			ok = false
+		case ok = <-success:
+		}
 		if !ok {
 			DPrintf("client=%v req server=%d not ok\n", ck.clientId, leaderId)
 		} else if reply.Err != OK {
@@ -72,9 +87,6 @@ func (ck *Clerk) Get(key string) string {
 			DPrintf("client=%v get key=%s err=%v\n", ck.clientId, key, ErrNoKey)
 			return ""
 		case ErrTimeOut:
-			continue
-		case ErrWrongLeader:
-			leaderId = (leaderId + 1) % len(ck.servers)
 			continue
 		default:
 			time.Sleep(ChangeLeaderInterval)
@@ -100,15 +112,27 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	args := PutAppendArgs{
 		ClientId: ck.clientId,
+		ReqId:    nrand(),
 		Key:      key,
 		Value:    value,
 		Op:       op,
 	}
 	leaderId := ck.leaderId
 	for {
-		var reply PutAppendReply
-		DPrintf("client=%v requesting server=%d\n", ck.clientId, leaderId)
-		ok := ck.servers[leaderId].Call("KVServer.PutAppend", &args, &reply)
+		reply := PutAppendReply{}
+		ok := false
+		success := make(chan bool)
+		go func() {
+			hasRecv := ck.servers[leaderId].Call("KVServer.PutAppend", &args, &reply)
+			success <- hasRecv
+		}()
+		stop := time.NewTimer(RequestTimeOut)
+		select {
+		case <-stop.C:
+			reply.Err = ErrTimeOut
+			ok = false
+		case ok = <-success:
+		}
 		if !ok {
 			DPrintf("client=%v req server=%d not ok\n", ck.clientId, leaderId)
 		} else if reply.Err != OK {
@@ -133,7 +157,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		case ErrTimeOut:
 			continue
 		default:
-			log.Fatal("client unknown err", reply.Err)
+			log.Fatal("client unknown err ", reply.Err)
 		}
 	}
 }

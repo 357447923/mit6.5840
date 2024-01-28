@@ -390,7 +390,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.CurrTerm = rf.currentTerm
 	reply.VoteGranted = false
 	if args.Term < rf.currentTerm {
-		DPrintf("server=%d, currentTerm=%d >= args.Term=%d, reject to vote to server=%d\n", rf.id, rf.currentTerm, args.Term, args.CandidateId)
+		//DPrintf("server=%d, currentTerm=%d >= args.Term=%d, reject to vote to server=%d\n", rf.id, rf.currentTerm, args.Term, args.CandidateId)
 		return
 	} else if args.Term == rf.currentTerm {
 		if rf.role == LEADER {
@@ -406,11 +406,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	// 当前任期未投票，则需要投票
 	defer rf.persist()
-	originTerm := rf.currentTerm
+	//originTerm := rf.currentTerm
 	if args.Term > rf.currentTerm {
 		// 可能是leader断网之后，发现其他节点正在选举
 		if rf.role == LEADER {
-			DPrintf("server=%d rf.currentTerm=%d, args.Term=%d\n", rf.id, rf.currentTerm, args.Term)
+			//DPrintf("server=%d rf.currentTerm=%d, args.Term=%d\n", rf.id, rf.currentTerm, args.Term)
 			rf.changeRole(FOLLOWER)
 		}
 		rf.currentTerm = args.Term
@@ -420,7 +420,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	lastLogTerm, lastLogIndex := rf.lastLogTermIndex()
 	if lastLogTerm > args.PrevLogTerm || (args.PrevLogTerm == lastLogTerm && args.PrevLogIndex < lastLogIndex) {
-		DPrintf("server=%d currentTerm=%d > args.Term=%d, vote reject\n", rf.id, rf.currentTerm, args.Term)
+		//DPrintf("server=%d currentTerm=%d > args.Term=%d, vote reject\n", rf.id, rf.currentTerm, args.Term)
 		return
 	}
 
@@ -430,8 +430,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = true
 	rf.changeRole(FOLLOWER)
 	rf.electionTimer.Stop()
-	DPrintf("server=%d currentTerm=%d, originTerm=%d, lastLogIndex=%d, lastLogTerm=%d, args.PrevLogTerm=%d, args.PrevLogIndex=%d, vote server=%d\n",
-		rf.id, rf.currentTerm, originTerm, lastLogIndex, lastLogTerm, args.PrevLogTerm, args.PrevLogIndex, args.CandidateId)
+	//DPrintf("server=%d currentTerm=%d, originTerm=%d, lastLogIndex=%d, lastLogTerm=%d, args.PrevLogTerm=%d, args.PrevLogIndex=%d, vote server=%d\n",
+	//	rf.id, rf.currentTerm, originTerm, lastLogIndex, lastLogTerm, args.PrevLogTerm, args.PrevLogIndex, args.CandidateId)
 
 }
 
@@ -583,7 +583,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 
 	if voteCount <= len(rf.peers)/2 {
 		rf.changeRole(FOLLOWER)
-		DPrintf("id=%d get vote less than 1/2 votes. grantedCount=%d\n", rf.id, voteCount)
+		//DPrintf("id=%d get vote less than 1/2 votes. grantedCount=%d\n", rf.id, voteCount)
 		return false
 	}
 
@@ -638,7 +638,7 @@ func (rf *Raft) genAppendEntriesArgs(server int, maxLogCount int) AppendEntriesA
 		args.PrevLogTerm, args.PrevLogIndex = rf.snapshot[0].SnapshotTerm, rf.snapshot[0].SnapshotIndex
 	} else if rf.lastLogIndex() >= rf.nextIndex[server] {
 		if matchIndex == EmptyCmdIdx {
-			DPrintf("follower=%d's match index=0 in leader=%d's list\n", server, rf.id)
+			//DPrintf("follower=%d's match index=0 in leader=%d's list\n", server, rf.id)
 			args.PrevLogTerm, args.PrevLogIndex = EmptyCmdTerm, EmptyCmdIdx
 		} else {
 			if rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex == matchIndex {
@@ -652,7 +652,7 @@ func (rf *Raft) genAppendEntriesArgs(server int, maxLogCount int) AppendEntriesA
 				args.PrevLogTerm = prevCommand.ReceiveTerm
 			}
 		}
-		DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, maxLogCount=%d\n", rf.nextIndex[server], rf.id, server, maxLogCount)
+		//DPrintf("genArgs nextIndex=%d, sender=%d, receiver=%d, maxLogCount=%d\n", rf.nextIndex[server], rf.id, server, maxLogCount)
 		if maxLogCount > 0 {
 			idx := rf.GenLogIdx(rf.nextIndex[server])
 			if rf.nextIndex[server]+maxLogCount <= len(rf.log) {
@@ -666,7 +666,7 @@ func (rf *Raft) genAppendEntriesArgs(server int, maxLogCount int) AppendEntriesA
 		args.Entries = nil
 		args.PrevLogTerm, args.PrevLogIndex = rf.lastLogTermIndex()
 	}
-	DPrintf("genArgs result=%v. It's leader=%d sending to follower=%d\n", args, rf.id, server)
+	//DPrintf("genArgs result=%v. It's leader=%d sending to follower=%d\n", args, rf.id, server)
 	return args
 }
 
@@ -677,13 +677,13 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 			break
 		}
 		args := rf.genAppendEntriesArgs(server, maxAppendCount)
-		var reply AppendEntriesReply
+		reply := AppendEntriesReply{}
 		successChan := make(chan bool, 1)
 		success := false
 		stop.Stop()
 		stop.Reset(RPCTimeOut * time.Millisecond)
 		go func() {
-			DPrintf("leader=%d发送心跳to follower=%d\n", rf.id, server)
+			//DPrintf("leader=%d发送心跳to follower=%d\n", rf.id, server)
 			res := rf.peers[server].Call("Raft.AppendEntries", &args, &reply)
 			successChan <- res
 		}()
@@ -694,14 +694,14 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 			break
 		}
 		if !success {
-			DPrintf("leader=%d send appendEntries RPC to follower=%d fail\n", rf.id, server)
+			//DPrintf("leader=%d send appendEntries RPC to follower=%d fail\n", rf.id, server)
 			break
 		} else if reply.Success {
 			// 成功并且有发送日志，则需要更新matchIndex和nextIndex
 			if len(args.Entries) > 0 {
 				rf.matchIndex[server] = args.Entries[len(args.Entries)-1].CommandIndex
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
-				DPrintf("leader=%d update follower=%d's match index to %d\n", rf.id, server, rf.matchIndex[server])
+				//DPrintf("leader=%d update follower=%d's match index to %d\n", rf.id, server, rf.matchIndex[server])
 				if args.Entries[len(args.Entries)-1].ReceiveTerm == rf.currentTerm {
 					rf.mu.Lock()
 					rf.updateCommit()
@@ -717,12 +717,12 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 		} else {
 			rf.nextIndex[server] = reply.NextIndex
 			rf.matchIndex[server] = reply.NextIndex - 1
-			DPrintf("no find follower=%d's match log, nextIndex=%d, matchIndex=%d\n", server, rf.nextIndex[server], rf.matchIndex[server])
+			//DPrintf("no find follower=%d's match log, nextIndex=%d, matchIndex=%d\n", server, rf.nextIndex[server], rf.matchIndex[server])
 			// 完全没有共识日志时的停止点
 			if rf.nextIndex[server] == EmptyCmdIdx {
 				rf.nextIndex[server] = EmptyCmdIdx + 1
 				rf.matchIndex[server] = EmptyCmdIdx
-				DPrintf("leader=%d sync match index from follower=%d fail\n", rf.id, server)
+				//DPrintf("leader=%d sync match index from follower=%d fail\n", rf.id, server)
 			} else if rf.snapshot[0].SnapshotIndex >= reply.NextIndex {
 				rf.SendInstallSnapshot(server)
 				break
@@ -751,7 +751,7 @@ func (rf *Raft) SendInstallSnapshot(server int) {
 			Data:              rf.snapshot[0].Snapshot,
 			Done:              true,
 		}
-		var reply InstallSnapshotReply
+		reply := InstallSnapshotReply{}
 		go func() {
 			DPrintf("leader=%d发送快照to follower=%d\n", rf.id, server)
 			res := rf.peers[server].Call("Raft.InstallSnapshot", &args, &reply)
@@ -783,8 +783,8 @@ func (rf *Raft) updateCommitEntries(leaderCommit int) {
 	originCommitIndex := rf.commitIndex
 	rf.commitIndex = min(leaderCommit, lastIndex)
 	if originCommitIndex != rf.commitIndex {
-		DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d, log=%v\n",
-			rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex, rf.log)
+		//DPrintf("is time to refresh commit for follower=%d, originCommitIndex=%d, newCommitIndex=%d, leaderCommit=%d, lastIndex=%d\n",
+		//	rf.id, originCommitIndex, rf.commitIndex, leaderCommit, lastIndex)
 		if originCommitIndex != rf.commitIndex {
 			rf.applyLogAsyncNow()
 		}
@@ -810,7 +810,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 如果任期比当前的小，但是commitIndex比当前节点大，说明可能当前节点可能曾经失去过联系
-	//if args.Term < rf.currentTerm && args.LeaderCommit <= rf.commitIndex {
 	if args.Term < rf.currentTerm {
 		// 由于此处并不是leader发送的心跳，所以不用重置心跳超时定时器
 		reply.Term = rf.currentTerm
@@ -836,8 +835,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Entries == nil {
 		if args.PrevLogIndex == EmptyCmdIdx {
 			reply.Success = true
-			DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, myCommit=%d, time=%d\n",
-				rf.leader, rf.id, rf.currentTerm, rf.commitIndex, time.Now().UnixMilli())
+			//DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, myCommit=%d, time=%d\n",
+			//	rf.leader, rf.id, rf.currentTerm, rf.commitIndex, time.Now().UnixMilli())
 			return
 		}
 		logIndex := rf.lastLogIndex()
@@ -859,20 +858,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if msg.ReceiveTerm != args.PrevLogTerm || msg.CommandIndex != args.PrevLogIndex {
 			reply.Success = false
 			reply.NextIndex = rf.findLastTermLogIdx(args.PrevLogIndex) + 1
-			DPrintf("follower=%d's logs are diff from leader, need to sync\n", rf.id)
+			//DPrintf("follower=%d's logs are diff from leader, need to sync\n", rf.id)
 			return
 		}
 		rf.log = rf.log[:rf.GenLogIdx(args.PrevLogIndex)+1]
 		reply.Success = true
 		// 更新已提交的条目
 		rf.updateCommitEntries(args.LeaderCommit)
-		DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, myCommit=%d, time=%d\n",
-			rf.leader, rf.id, rf.currentTerm, rf.commitIndex, time.Now().UnixMilli())
+		//DPrintf("heart beat handle success, leader=%d, me=%d, term=%d, myCommit=%d, time=%d\n",
+		//	rf.leader, rf.id, rf.currentTerm, rf.commitIndex, time.Now().UnixMilli())
 		return
 	}
-	DPrintf("follower=%d handle logs, curTerm=%d, args=%v\n", rf.id, rf.currentTerm, args)
+	//DPrintf("follower=%d handle logs, curTerm=%d, args=%v\n", rf.id, rf.currentTerm, args)
 	if len(args.Entries) > 0 {
-		DPrintf("follower=%d will handle count=%d, curIndex=%d\n", rf.id, len(args.Entries), rf.lastLogIndex())
+		//DPrintf("follower=%d will handle count=%d, curIndex=%d\n", rf.id, len(args.Entries), rf.lastLogIndex())
 	}
 	if len(rf.log) == 0 {
 		if rf.snapshot[0].SnapshotValid && args.PrevLogIndex == rf.snapshot[0].SnapshotIndex && args.PrevLogTerm == rf.snapshot[0].SnapshotTerm {
@@ -895,7 +894,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 这条消息对于当前节点来说过于超前
 		reply.Success = false
 		reply.NextIndex = rf.findLastTermLogIdx(rf.lastLogIndex()) + 1
-		DPrintf("日志对于follower=%d过于超前\n", rf.id)
+		//DPrintf("日志对于follower=%d过于超前\n", rf.id)
 		return
 	}
 	// 寻找index相同的日志，并检查是否为共识日志
@@ -905,7 +904,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.log = rf.log[:0]
 		rf.log = append(rf.log, args.Entries...)
 		reply.Success = true
-		DPrintf("follower=%d sync hole leader=%d's log\n", rf.id, args.LeaderId)
+		//DPrintf("follower=%d sync hole leader=%d's log\n", rf.id, args.LeaderId)
 		rf.updateCommitEntries(args.LeaderCommit)
 		return
 	}
@@ -922,9 +921,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		// 更新日志提交信息
 		rf.updateCommitEntries(args.LeaderCommit)
 		reply.Success = true
-		DPrintf("follower=%d receive log, firstTerm=%d, firstIndex=%d, lastTerm=%d, lastIndex=%d\n",
-			rf.id, args.Entries[0].ReceiveTerm, args.Entries[0].CommandIndex,
-			args.Entries[len(args.Entries)-1].ReceiveTerm, args.Entries[len(args.Entries)-1].CommandIndex)
+		//DPrintf("follower=%d receive log, firstTerm=%d, firstIndex=%d, lastTerm=%d, lastIndex=%d\n",
+		//	rf.id, args.Entries[0].ReceiveTerm, args.Entries[0].CommandIndex,
+		//	args.Entries[len(args.Entries)-1].ReceiveTerm, args.Entries[len(args.Entries)-1].CommandIndex)
 	}
 
 }
@@ -1043,7 +1042,7 @@ func (rf *Raft) updateCommit() {
 				break
 			}
 			rf.commitIndex = i
-			DPrintf("leader=%d 发现logIndex=%d达成了共识, matchIndex=%v\n", rf.id, rf.commitIndex, rf.matchIndex)
+			//DPrintf("leader=%d 发现logIndex=%d达成了共识, matchIndex=%v\n", rf.id, rf.commitIndex, rf.matchIndex)
 		}
 		if originCommitIndex != rf.commitIndex {
 			rf.applyLogAsyncNow()
@@ -1056,18 +1055,18 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-		var success bool
+		success := false
 		select {
 		case <-rf.electionTimer.C:
 			{
-				DPrintf("选举超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
+				//DPrintf("选举超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
 				success = rf.startElect(false)
 			}
 		case <-rf.waitHeartBeatTimer.C:
 			{
 				if rf.role == FOLLOWER {
 					rf.leader = VoteForInvalid
-					DPrintf("心跳超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
+					//DPrintf("心跳超时, id=%d, time=%d\n", rf.id, time.Now().UnixMilli())
 					success = rf.startElect(true)
 				}
 			}
