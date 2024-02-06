@@ -4,6 +4,7 @@ import (
 	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raft"
+	"bytes"
 	"fmt"
 	"log"
 	"sync"
@@ -45,11 +46,12 @@ type NotifyMsg struct {
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	mu        sync.Mutex
+	me        int
+	rf        *raft.Raft
+	applyCh   chan raft.ApplyMsg
+	persister *raft.Persister
+	dead      int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -76,11 +78,34 @@ func (kv *KVServer) getData(key string) (err Err, val string) {
 	return
 }
 
+func (kv *KVServer) loadSnapshot(snapshot []byte) {
+	w := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(w)
+	var data map[string]string
+	err := d.Decode(&data)
+	if err != nil {
+		panic(err)
+	}
+	var lastCmd map[int64]int64
+	err = d.Decode(&lastCmd)
+	if err != nil {
+		panic(err)
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	kv.data = data
+	kv.lastCmd = lastCmd
+}
+
 func (kv *KVServer) handleApplyCh() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
 			if !msg.CommandValid {
+				// 加载Snapshot
+				// loadSnapshot内部有锁
+				kv.loadSnapshot(msg.Snapshot)
+				DPrintf("follower=%d load snapshot success\n", kv.me)
 				continue
 			}
 			op := msg.Command.(Op)
@@ -105,7 +130,7 @@ func (kv *KVServer) handleApplyCh() {
 						kv.data[op.Key] = op.Value
 						err = OK
 					}
-					DPrintf("server=%d refresh {\"%v\" : \"%v\"}\n", kv.me, op.Key, kv.data[op.Key])
+					//DPrintf("server=%d refresh {\"%v\" : \"%v\"}\n", kv.me, op.Key, kv.data[op.Key])
 				}
 			case GetOp:
 				err, value = kv.getData(op.Key)
@@ -125,6 +150,7 @@ func (kv *KVServer) handleApplyCh() {
 					timeout := time.NewTimer(WaitOpTimeOut)
 					select {
 					case <-timeout.C:
+						DPrintf("follower=%d say I'm timeout\n", kv.me)
 					case ch <- NotifyMsg{
 						Value: value,
 						Err:   err,
@@ -133,6 +159,8 @@ func (kv *KVServer) handleApplyCh() {
 				}
 			}
 			kv.mu.Unlock()
+			// 都是单个线程的操作，所以saveSnapshot应该是不需要上锁的
+			kv.saveSnapshot(msg.CommandIndex)
 		}
 	}
 }
@@ -156,9 +184,9 @@ func (kv *KVServer) waitCmd(op Op) (resp NotifyMsg) {
 	case <-stop.C:
 		resp.Err = ErrTimeOut
 	case resp = <-kv.msgNotify[op.ReqId]:
-		DPrintf("server=%d handle success. op=%v, resp=%v\n", kv.me, op, resp)
+		//DPrintf("server=%d handle success. op=%v, resp.Err=%v\n", kv.me, op, resp.Err)
 	}
-	//DPrintf("server=%d say hello\n", kv.me)
+	DPrintf("server=%d say hello, resp.Err=%v\n", kv.me, resp.Err)
 	kv.mu.Lock()
 	delete(kv.msgNotify, op.ReqId)
 	kv.mu.Unlock()
@@ -180,7 +208,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		Key:      args.Key,
 		Method:   GetOp,
 	}
-	DPrintf("I=%d come to here\n", kv.me)
 	resMsg := kv.waitCmd(op)
 	reply.Value, reply.Err = resMsg.Value, resMsg.Err
 }
@@ -207,6 +234,33 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = resMsg.Err
 	DPrintf("server=%d execute put append success. op=%v, resp=%v. cost=%vms\n",
 		kv.me, op, reply, time.Now().UnixMilli()-start)
+}
+
+func (kv *KVServer) saveSnapshot(logIndex int) {
+	if kv.maxraftstate == -1 || kv.maxraftstate >= kv.persister.RaftStateSize() {
+		return
+	}
+	size := kv.persister.RaftStateSize()
+	start := time.Now().UnixMilli()
+	DPrintf("server=%d saving snapshot\n", kv.me)
+	data := kv.genSnapshotData()
+	kv.rf.Snapshot(logIndex, data)
+	DPrintf("server=%d save snapshot success. o'size=%d c'size=%d cost=%v\n", kv.me, size, kv.persister.RaftStateSize(), time.Now().UnixMilli()-start)
+	return
+}
+
+func (kv *KVServer) genSnapshotData() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	err := e.Encode(kv.data)
+	if err != nil {
+		panic(err)
+	}
+	err = e.Encode(kv.lastCmd)
+	if err != nil {
+		panic(err)
+	}
+	return w.Bytes()
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -244,9 +298,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-
+	var err Err
+	err = ""
+	labgob.Register(err)
 	kv := new(KVServer)
 	kv.me = me
+	kv.persister = persister
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.

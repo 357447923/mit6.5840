@@ -10,7 +10,7 @@ import "crypto/rand"
 import "math/big"
 
 const (
-	ChangeLeaderInterval = 20 * time.Millisecond
+	ChangeLeaderInterval = 50 * time.Millisecond
 	RequestTimeOut       = 500 * time.Millisecond
 )
 
@@ -87,6 +87,7 @@ func (ck *Clerk) Get(key string) string {
 			DPrintf("client=%v get key=%s err=%v\n", ck.clientId, key, ErrNoKey)
 			return ""
 		case ErrTimeOut:
+			time.Sleep(ChangeLeaderInterval)
 			continue
 		default:
 			time.Sleep(ChangeLeaderInterval)
@@ -155,6 +156,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			leaderId = (leaderId + 1) % len(ck.servers)
 			continue
 		case ErrTimeOut:
+			time.Sleep(ChangeLeaderInterval)
 			continue
 		default:
 			log.Fatal("client unknown err ", reply.Err)
