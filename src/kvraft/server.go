@@ -101,6 +101,7 @@ func (kv *KVServer) handleApplyCh() {
 	for {
 		select {
 		case msg := <-kv.applyCh:
+			DPrintf("server=%d handle msg, log=%v\n", kv.me, msg)
 			if !msg.CommandValid {
 				// 加载Snapshot
 				// loadSnapshot内部有锁
@@ -166,7 +167,11 @@ func (kv *KVServer) handleApplyCh() {
 }
 
 func (kv *KVServer) waitCmd(op Op) (resp NotifyMsg) {
-	kv.rf.Start(op)
+	_, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		resp.Err = ErrWrongLeader
+		return
+	}
 	DPrintf("server=%d已经发送请求\n", kv.me)
 	kv.mu.Lock()
 	DPrintf("server=%d锁获取成功\n", kv.me)
@@ -175,7 +180,7 @@ func (kv *KVServer) waitCmd(op Op) (resp NotifyMsg) {
 		resp.Err = ErrTimeOut
 		return
 	}
-	kv.msgNotify[op.ReqId] = make(chan NotifyMsg, 1)
+	kv.msgNotify[op.ReqId] = make(chan NotifyMsg, 10)
 	kv.mu.Unlock()
 	DPrintf("server=%d解锁成功\n", kv.me)
 	stop := time.NewTimer(WaitOpTimeOut)

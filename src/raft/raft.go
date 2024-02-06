@@ -45,7 +45,7 @@ const (
 	BaseElectTimeOut = 150
 	HeartBeatTimeOut = 500
 	OneHeartBeatLag  = 20
-	ApplyLogLag      = 200
+	ApplyLogLag      = 150
 	RPCTimeOut       = 80
 )
 
@@ -87,6 +87,8 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	readLockCount  int32
+	writeLockCount int32
 
 	id                 int  // 当前节点的id
 	leader             int  // 当前集群的leader
@@ -111,6 +113,30 @@ type Raft struct {
 	// exists unstably in leader server as follows(非持久数据)
 	nextIndex  []int // 对于每一个服务器，记录需要发给它的下一个日志条目的索引（初始化为 Leader 上一条日志的索引值+1）
 	matchIndex []int // 对于每一个服务器，记录已经复制到该服务器的日志的最高索引值（从0开始递增）
+}
+
+func (rf *Raft) RLock() {
+	rf.snapshotMutex.RLock()
+	/*val := */ atomic.AddInt32(&rf.readLockCount, 1)
+	//DPrintf("server=%d get read lock. read lock=%d, write lock=%d\n", rf.id, val, atomic.LoadInt32(&rf.writeLockCount))
+}
+
+func (rf *Raft) RUnlock() {
+	rf.snapshotMutex.RUnlock()
+	/*val :=*/ atomic.AddInt32(&rf.readLockCount, -1)
+	//DPrintf("server=%d give up read lock. read lock=%d, write lock=%d\n", rf.id, val, atomic.LoadInt32(&rf.writeLockCount))
+}
+
+func (rf *Raft) Lock() {
+	rf.snapshotMutex.Lock()
+	/*val := */ atomic.AddInt32(&rf.writeLockCount, 1)
+	//DPrintf("server=%d get write lock. read lock=%d, write lock=%d\n", rf.id, atomic.LoadInt32(&rf.readLockCount), val)
+}
+
+func (rf *Raft) Unlock() {
+	rf.snapshotMutex.Unlock()
+	/*val :=*/ atomic.AddInt32(&rf.writeLockCount, -1)
+	//DPrintf("server=%d give up write lock. read lock=%d, write lock=%d\n", rf.id, atomic.LoadInt32(&rf.readLockCount), val)
 }
 
 // return currentTerm and whether this server believes it is the leader.
@@ -266,10 +292,11 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	if rf.snapshot[0].SnapshotValid && index < rf.snapshot[0].SnapshotIndex || rf.commitIndex < index {
 		return
 	}
-
 	DPrintf("server=%d调用Snapshot, index=%d\n", rf.id, index)
-	rf.snapshotMutex.Lock()
-	defer rf.snapshotMutex.Unlock()
+	rf.Lock()
+	defer func() {
+		rf.Unlock()
+	}()
 	snapshotLastIndexInLog := rf.GenLogIdx(index)
 	msg := rf.log[snapshotLastIndexInLog]
 	rf.snapshot[0].SnapshotValid = true
@@ -335,10 +362,10 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		return
 	}
 
-	rf.snapshotMutex.Lock()
+	rf.Lock()
 	defer func() {
 		rf.persist()
-		rf.snapshotMutex.Unlock()
+		rf.Unlock()
 	}()
 	lastRemoveIdx := rf.GenLogIdx(args.LastIncludedIndex)
 	// 完成接收到的快照的最终初始化
@@ -678,7 +705,7 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 			break
 		}
 		args := rf.genAppendEntriesArgs(server, maxAppendCount)
-		rf.snapshotMutex.RUnlock()
+		rf.RUnlock()
 		reply := AppendEntriesReply{}
 		successChan := make(chan bool, 1)
 		success := false
@@ -699,7 +726,7 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 			if maxAppendCount == 0 {
 				DPrintf("leader=%d send appendEntries RPC to follower=%d fail\n", rf.id, server)
 			}
-			rf.snapshotMutex.RLock()
+			rf.RLock()
 			break
 		} else if reply.Success {
 			// 成功并且有发送日志，则需要更新matchIndex和nextIndex
@@ -709,19 +736,19 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 				//DPrintf("leader=%d update follower=%d's match index to %d\n", rf.id, server, rf.matchIndex[server])
 				if args.Entries[len(args.Entries)-1].ReceiveTerm == rf.currentTerm {
 					rf.mu.Lock()
+					rf.RLock()
 					rf.updateCommit()
-					//rf.snapshotMutex.RLock()
 					rf.persist()
-					//rf.snapshotMutex.RUnlock()
+					rf.RUnlock()
 					rf.mu.Unlock()
 				}
 			}
-			rf.snapshotMutex.RLock()
+			rf.RLock()
 			break
 			// 收到的回应任期比当前任期大，说明当前节点不是leader
 		} else if reply.Term > rf.currentTerm {
 			rf.changeRole(FOLLOWER)
-			rf.snapshotMutex.RLock()
+			rf.RLock()
 			break
 		} else {
 			rf.nextIndex[server] = reply.NextIndex
@@ -736,7 +763,7 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 				rf.SendInstallSnapshot(server)
 				break
 			}*/
-			rf.snapshotMutex.RLock()
+			rf.RLock()
 			if !(rf.nextIndex[server] == EmptyCmdIdx) && rf.snapshot[0].SnapshotIndex >= reply.NextIndex {
 				rf.SendInstallSnapshot(server)
 				break
@@ -765,7 +792,7 @@ func (rf *Raft) SendInstallSnapshot(server int) {
 		Data:              rf.snapshot[0].Snapshot,
 		Done:              true,
 	}
-	rf.snapshotMutex.RUnlock()
+	rf.RUnlock()
 	reply := InstallSnapshotReply{}
 	go func() {
 		DPrintf("leader=%d发送快照to follower=%d\n", rf.id, server)
@@ -787,7 +814,7 @@ func (rf *Raft) SendInstallSnapshot(server int) {
 		rf.nextIndex[server] = lastIncludedIndex + 1
 		rf.matchIndex[server] = lastIncludedIndex
 	}
-	rf.snapshotMutex.RLock()
+	rf.RLock()
 }
 
 // 提交日志
@@ -841,10 +868,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.currentTerm = args.Term
 	rf.leader = args.LeaderId
 	reply.Term = rf.currentTerm
-	rf.snapshotMutex.Lock()
+	rf.Lock()
 	defer func() {
 		rf.persist()
-		rf.snapshotMutex.Unlock()
+		rf.Unlock()
 	}()
 	if args.Entries == nil {
 		if args.PrevLogIndex == EmptyCmdIdx {
@@ -967,8 +994,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := rf.role == LEADER
 	// Your code here (2B).
 	if isLeader {
-		rf.snapshotMutex.Lock()
-		defer rf.snapshotMutex.Unlock()
+		rf.Lock()
+		defer func() {
+			rf.Unlock()
+		}()
 		if isLeader {
 			term = rf.currentTerm
 			index = rf.lastLogIndex()
@@ -1013,23 +1042,22 @@ func (rf *Raft) fastNotifyLeaderChangeAndRegisterHeartBeat() {
 		}
 		// 采取的心跳注册策略为通知leader变更后，再进行注册心跳
 		go func(server int) {
-			rf.snapshotMutex.RLock()
-			DPrintf("leader=%d get read lock.\n", rf.id)
+			rf.RLock()
 			rf.SendAppend(server, 0)
-			rf.snapshotMutex.RUnlock()
+			rf.RUnlock()
 			rf.heartBeatTimer[server].Stop()
 			rf.heartBeatTimer[server].Reset(OneHeartBeatLag * time.Millisecond)
 			go func(index int) {
 				for !rf.killed() && rf.role == LEADER {
 					select {
 					case <-rf.heartBeatTimer[index].C:
-						rf.snapshotMutex.RLock()
+						rf.RLock()
 						if rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex >= rf.nextIndex[index] {
 							rf.SendInstallSnapshot(index)
 						} else {
 							rf.SendAppend(index, len(rf.log))
 						}
-						rf.snapshotMutex.RUnlock()
+						rf.RUnlock()
 					}
 					rf.heartBeatTimer[index].Stop()
 					rf.heartBeatTimer[index].Reset(OneHeartBeatLag * time.Millisecond)
@@ -1117,6 +1145,15 @@ func (rf *Raft) applyLogAsyncNow() {
 	rf.applyLogTimer.Reset(0)
 }
 
+func (rf *Raft) apply(msg *ApplyMsg) bool {
+	select {
+	case rf.applyCh <- *msg:
+		return true
+	default:
+		return false
+	}
+}
+
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
@@ -1175,21 +1212,27 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case <-rf.applyLogTimer.C:
 				//DPrintf("server=%d start to apply log. lastApply=%d, commitIndex=%d\n", rf.id, rf.lastApplied, rf.commitIndex)
 				//originApply := rf.lastApplied
-				rf.snapshotMutex.RLock()
+				// 如果rf.applyCh未来得及消费，则停止apply，避免死锁
+				rf.RLock()
 				// 先将快照进行apply
+				success := true
 				if rf.snapshot[0].SnapshotValid && rf.lastApplied < rf.snapshot[0].SnapshotIndex {
-					rf.applyCh <- *rf.snapshot[0]
-					rf.lastApplied = rf.snapshot[0].SnapshotIndex
-					DPrintf("server=%d apply snapshot, index=%d, term=%d\n", rf.id, rf.snapshot[0].SnapshotIndex, rf.snapshot[0].SnapshotTerm)
+					success = rf.apply(rf.snapshot[0])
+					if success {
+						rf.lastApplied = rf.snapshot[0].SnapshotIndex
+						DPrintf("server=%d apply snapshot, index=%d, term=%d\n", rf.id, rf.snapshot[0].SnapshotIndex, rf.snapshot[0].SnapshotTerm)
+					}
 				}
 				// 对非快照进行apply
-				for rf.lastApplied < rf.commitIndex {
-					rf.lastApplied++
-					applyIdx := rf.GenLogIdx(rf.lastApplied)
-					rf.applyCh <- rf.log[applyIdx]
-					DPrintf("server=%d apply log=%v\n", rf.id, rf.log[applyIdx])
+				for success && rf.lastApplied < rf.commitIndex {
+					applyIdx := rf.GenLogIdx(rf.lastApplied + 1)
+					success = rf.apply(&rf.log[applyIdx])
+					if success {
+						rf.lastApplied++
+						DPrintf("server=%d apply log=%v\n", rf.id, rf.log[applyIdx])
+					}
 				}
-				rf.snapshotMutex.RUnlock()
+				rf.RUnlock()
 			}
 			rf.applyLogTimer.Stop()
 			rf.applyLogTimer.Reset(ApplyLogLag * time.Millisecond)

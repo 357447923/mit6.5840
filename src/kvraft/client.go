@@ -76,6 +76,7 @@ func (ck *Clerk) Get(key string) string {
 		}
 		if !ok {
 			leaderId = (leaderId + 1) % len(ck.servers)
+			time.Sleep(ChangeLeaderInterval)
 			continue
 		}
 		switch reply.Err {
