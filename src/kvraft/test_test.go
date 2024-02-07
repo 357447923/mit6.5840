@@ -422,6 +422,7 @@ func GenericTestSpeed(t *testing.T, part string, maxraftstate int) {
 	cfg.end()
 }
 
+// FIXME: 我发现3A无法通过测试，需要具体进行测试. 测试后是在persist这些内容中，具体原因未知，简单观看日志，情况很正常
 func TestBasic3A(t *testing.T) {
 	// Test: one client (3A) ...
 	GenericTest(t, "3A", 1, 5, false, false, false, -1, false)

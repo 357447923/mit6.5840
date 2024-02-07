@@ -44,8 +44,9 @@ const (
 	VoteForInvalid   = -1
 	BaseElectTimeOut = 150
 	HeartBeatTimeOut = 500
-	OneHeartBeatLag  = 20
-	ApplyLogLag      = 150
+	OneHeartBeatLag  = 30
+	ApplyLogLag      = 100
+	ApplyWaitTimeOut = 5 * time.Millisecond
 	RPCTimeOut       = 80
 )
 
@@ -293,10 +294,15 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		return
 	}
 	DPrintf("server=%d调用Snapshot, index=%d\n", rf.id, index)
+	rf.mu.Lock()
 	rf.Lock()
 	defer func() {
+		rf.mu.Unlock()
 		rf.Unlock()
 	}()
+	if rf.snapshot[0].SnapshotValid && index < rf.snapshot[0].SnapshotIndex || rf.commitIndex < index {
+		return
+	}
 	snapshotLastIndexInLog := rf.GenLogIdx(index)
 	msg := rf.log[snapshotLastIndexInLog]
 	rf.snapshot[0].SnapshotValid = true
@@ -336,6 +342,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		return
 	}
 
+	rf.RLock()
+	// 由于snapshot都是已经提交的数据，故snapshot可以不比较term
+	if rf.snapshot[0].SnapshotValid &&
+		rf.snapshot[0].SnapshotIndex >= args.LastIncludedIndex {
+		rf.RUnlock()
+		return
+	}
+	rf.RUnlock()
 	DPrintf("follower=%d install snapshot, term=%d, index=%d, offset=%d, done=%v\n"+
 		"follower=%d current snapshot len=%d\n", rf.id, args.LastIncludeTerm, args.LastIncludedIndex, args.Offset,
 		args.Done, rf.id, len(rf.snapshot[1].Snapshot))
@@ -839,7 +853,7 @@ func (rf *Raft) findLastTermLogIdx(cmdIdx int) int {
 	}
 	term := rf.log[idx].ReceiveTerm
 	ans := cmdIdx - 1
-	for ; ans > rf.commitIndex || (rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex < ans); ans-- {
+	for ; ans > rf.commitIndex && (rf.snapshot[0].SnapshotValid && rf.snapshot[0].SnapshotIndex < ans); ans-- {
 		if rf.log[rf.GenLogIdx(ans)].ReceiveTerm < term {
 			break
 		}
@@ -918,7 +932,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if len(args.Entries) > 0 {
 		DPrintf("follower=%d will handle count=%d, curIndex=%d\n", rf.id, len(args.Entries), rf.lastLogIndex())
 		defer func(count int) {
-			DPrintf("follower=%d handle count=%d success.\n", rf.id, count)
+			DPrintf("follower=%d handle count=%d finished.\n", rf.id, count)
 		}(len(args.Entries))
 	}
 	if len(rf.log) == 0 {
@@ -944,11 +958,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.NextIndex = rf.findLastTermLogIdx(rf.lastLogIndex()) + 1
 		//DPrintf("日志对于follower=%d过于超前\n", rf.id)
 		return
+	} else if prevLogIndex < rf.commitIndex {
+		reply.Success = false
+		reply.NextIndex = rf.commitIndex + 1
+		return
 	}
 	// 寻找index相同的日志，并检查是否为共识日志
 	index := rf.GenLogIdx(args.PrevLogIndex)
 	if index == -1 {
-		// 找不到共识日志
+		// 找不到共识日志, 并且prevLogIndex为快照的index
 		rf.log = rf.log[:0]
 		rf.log = append(rf.log, args.Entries...)
 		reply.Success = true
@@ -1150,7 +1168,13 @@ func (rf *Raft) apply(msg *ApplyMsg) bool {
 	case rf.applyCh <- *msg:
 		return true
 	default:
-		return false
+		timeout := time.NewTimer(ApplyWaitTimeOut)
+		select {
+		case rf.applyCh <- *msg:
+			return true
+		case <-timeout.C:
+			return false
+		}
 	}
 }
 
@@ -1221,6 +1245,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					if success {
 						rf.lastApplied = rf.snapshot[0].SnapshotIndex
 						DPrintf("server=%d apply snapshot, index=%d, term=%d\n", rf.id, rf.snapshot[0].SnapshotIndex, rf.snapshot[0].SnapshotTerm)
+					} else {
+						rf.applyLogAsyncNow()
 					}
 				}
 				// 对非快照进行apply
@@ -1230,12 +1256,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					if success {
 						rf.lastApplied++
 						DPrintf("server=%d apply log=%v\n", rf.id, rf.log[applyIdx])
+					} else {
+						rf.applyLogAsyncNow()
+						break
 					}
 				}
 				rf.RUnlock()
 			}
-			rf.applyLogTimer.Stop()
-			rf.applyLogTimer.Reset(ApplyLogLag * time.Millisecond)
+			//rf.applyLogTimer.Stop()
+			//rf.applyLogTimer.Reset(ApplyLogLag * time.Millisecond)
 		}
 	}()
 
