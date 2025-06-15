@@ -118,25 +118,25 @@ type Raft struct {
 
 func (rf *Raft) RLock() {
 	rf.snapshotMutex.RLock()
-	/*val := */ atomic.AddInt32(&rf.readLockCount, 1)
+	atomic.AddInt32(&rf.readLockCount, 1)
 	//DPrintf("server=%d get read lock. read lock=%d, write lock=%d\n", rf.id, val, atomic.LoadInt32(&rf.writeLockCount))
 }
 
 func (rf *Raft) RUnlock() {
 	rf.snapshotMutex.RUnlock()
-	/*val :=*/ atomic.AddInt32(&rf.readLockCount, -1)
+	atomic.AddInt32(&rf.readLockCount, -1)
 	//DPrintf("server=%d give up read lock. read lock=%d, write lock=%d\n", rf.id, val, atomic.LoadInt32(&rf.writeLockCount))
 }
 
 func (rf *Raft) Lock() {
 	rf.snapshotMutex.Lock()
-	/*val := */ atomic.AddInt32(&rf.writeLockCount, 1)
+	atomic.AddInt32(&rf.writeLockCount, 1)
 	//DPrintf("server=%d get write lock. read lock=%d, write lock=%d\n", rf.id, atomic.LoadInt32(&rf.readLockCount), val)
 }
 
 func (rf *Raft) Unlock() {
 	rf.snapshotMutex.Unlock()
-	/*val :=*/ atomic.AddInt32(&rf.writeLockCount, -1)
+	atomic.AddInt32(&rf.writeLockCount, -1)
 	//DPrintf("server=%d give up write lock. read lock=%d, write lock=%d\n", rf.id, atomic.LoadInt32(&rf.readLockCount), val)
 }
 
@@ -423,6 +423,7 @@ type RequestVoteReply struct {
 }
 
 // example RequestVote RPC handler.
+// 投票，规则为:
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
@@ -436,6 +437,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if rf.role == LEADER {
 			return
 		}
+		// 以下两个if为幂等操作
 		if rf.voteFor == args.CandidateId {
 			reply.VoteGranted = true
 			return
@@ -446,7 +448,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	// 当前任期未投票，则需要投票
 	defer rf.persist()
-	//originTerm := rf.currentTerm
+
 	if args.Term > rf.currentTerm {
 		// 可能是leader断网之后，发现其他节点正在选举
 		if rf.role == LEADER {
@@ -560,10 +562,12 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		return true
 	}
 	// 每一任都必须为两个结果之一: 选举失败，选举成功
+	// 选举超时，但已投票
 	if !isHeartBeatTimeOut && rf.leader != VoteForInvalid {
 		return true
 	}
 	rf.changeRole(CANDIDATE)
+	// raft的选举规则是，任期越新和日志越新的候选者成为Leader
 	prevLogTerm, prevLogIndex := rf.lastLogTermIndex()
 
 	args := RequestVoteArgs{
@@ -572,6 +576,8 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 		PrevLogIndex: prevLogIndex,
 		PrevLogTerm:  prevLogTerm,
 	}
+	// TODO 为什么选举前先持久化？
+	// 好像确实不用，前面没有状态修改
 	rf.persist()
 	voteCount := 1
 	chResCount := 1
@@ -584,6 +590,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 			var reply RequestVoteReply
 			//DPrintf("id=%d send to id=%d\n", rf.id, index)
 			end := false
+			// end是指请求投票过程是否结束，若未结束且仍然在投票中，则断定为q
 			for !end && rf.role == CANDIDATE {
 				end = rf.sendRequestVote(index, &args, &reply)
 			}
@@ -591,6 +598,8 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 				return
 			}
 			votesCh <- reply.VoteGranted
+			// 如果发现当前节点的任期比其他节点回复的任期小，就将当前任期设置为回复的任期
+			// 感觉这个不应该是选到Leader后再统一设置任期吗？
 			if reply.CurrTerm > args.Term {
 				rf.currentTerm = reply.CurrTerm
 				rf.changeRole(FOLLOWER)
@@ -619,6 +628,7 @@ func (rf *Raft) startElect(isHeartBeatTimeOut bool) bool {
 					end = true
 				}
 			}
+
 		}
 	}
 
@@ -714,6 +724,7 @@ func (rf *Raft) genAppendEntriesArgs(server int, maxLogCount int) AppendEntriesA
 func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 	stop := time.NewTimer(RPCTimeOut * time.Millisecond)
 	for {
+		// 有且仅有Leader可以向Follower发送日志
 		if rf.role != LEADER || (rf.snapshot[0].SnapshotValid &&
 			rf.nextIndex[server] <= rf.snapshot[0].SnapshotIndex) {
 			break
@@ -748,6 +759,7 @@ func (rf *Raft) SendAppend(server int, maxAppendCount int) {
 				rf.matchIndex[server] = args.Entries[len(args.Entries)-1].CommandIndex
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 				//DPrintf("leader=%d update follower=%d's match index to %d\n", rf.id, server, rf.matchIndex[server])
+				// 发送成功时，发送的最后一条日志是当前任期下产生的日志
 				if args.Entries[len(args.Entries)-1].ReceiveTerm == rf.currentTerm {
 					rf.mu.Lock()
 					rf.RLock()
@@ -1065,6 +1077,7 @@ func (rf *Raft) fastNotifyLeaderChangeAndRegisterHeartBeat() {
 			rf.RUnlock()
 			rf.heartBeatTimer[server].Stop()
 			rf.heartBeatTimer[server].Reset(OneHeartBeatLag * time.Millisecond)
+			// 注册心跳协程
 			go func(index int) {
 				for !rf.killed() && rf.role == LEADER {
 					select {
@@ -1198,6 +1211,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	// 每个节点在工作时都先认为自己是Follower，并且没有Leader
 	rf.role = FOLLOWER
 	rf.leader = VoteForInvalid
 	rf.voteFor = VoteForInvalid
@@ -1214,9 +1228,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.currentTerm = 0
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState(), persister.ReadSnapshot())
-
+	// 认为500ms+100ms以内的随机数内收不到心跳即为超时
 	rf.waitHeartBeatTimer = time.NewTimer(time.Duration(HeartBeatTimeOut+rand.Int63()%100) * time.Millisecond)
+	// 设置选举超时随机时间
 	rf.electionTimer = time.NewTimer(randomElectTimeOut())
+	// TODO 设置心跳超时计时器，先静默，等待Leader发送心跳，如果这个时间段内没有心跳，则意味可能是新集群
 	rf.heartBeatTimer = make([]*time.Timer, len(peers))
 	for i := range rf.heartBeatTimer {
 		rf.heartBeatTimer[i] = time.NewTimer(OneHeartBeatLag * time.Millisecond)

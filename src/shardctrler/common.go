@@ -1,5 +1,7 @@
 package shardctrler
 
+import "log"
+
 //
 // Shard controler: assigns shards to replication groups.
 //
@@ -19,6 +21,15 @@ package shardctrler
 
 // The number of shards.
 const NShards = 10
+const Debug = false
+
+const (
+	OK              = "OK"
+	ErrNoKey        = "ErrNoKey"
+	ErrWrongLeader  = "ErrWrongLeader"
+	ErrTimeOut      = "ErrTimeOut"
+	ConfigNotExists = "ConfigNotExists"
+)
 
 // A configuration -- an assignment of shards to groups.
 // Please don't change this.
@@ -28,9 +39,12 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
-const (
-	OK = "OK"
-)
+func DPrintf(format string, a ...interface{}) {
+	if Debug {
+		log.Printf(format, a...)
+	}
+	return
+}
 
 type Err string
 
