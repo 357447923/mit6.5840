@@ -1,14 +1,23 @@
 package shardctrler
 
 import (
-	"6.5840/raft"
+	"fmt"
+	"sync"
 	"time"
+
+	"6.5840/labgob"
+	"6.5840/labrpc"
+	"6.5840/raft"
 )
-import "6.5840/labrpc"
-import "sync"
-import "6.5840/labgob"
 
 const WaitOpTimeOut = 500 * time.Millisecond
+
+const (
+	Join  = "Join"
+	Leave = "Leave"
+	Move  = "Move"
+	Query = "Query"
+)
 
 type ShardCtrler struct {
 	mu      sync.Mutex
@@ -17,7 +26,6 @@ type ShardCtrler struct {
 	applyCh chan raft.ApplyMsg
 
 	// Your data here.
-
 	configs []Config // indexed by config num
 
 	lastReq    map[int64]ReqId          // clientId:reqId
@@ -46,20 +54,124 @@ type NotifyMsg struct {
 	Err         Err
 }
 
+func (sc *ShardCtrler) addNotify(clientId int64) {
+	channel := make(chan NotifyMsg, 1)
+	sc.notifyChan[clientId] = channel
+}
+
+/*关闭id对应的chan，并且将该chan从sc中移除*/
+func (sc *ShardCtrler) stopNotify(clientId int64) {
+	if channel, ok := sc.notifyChan[clientId]; ok {
+		close(channel)
+		delete(sc.notifyChan, clientId)
+	}
+}
+
+func (sc *ShardCtrler) waitResp(clientId int64, method string) NotifyMsg {
+	wait_timer := time.NewTimer(WaitOpTimeOut)
+	select {
+	case resp := <-sc.notifyChan[clientId]:
+		{
+			return resp
+		}
+	case <-wait_timer.C:
+		{
+			return NotifyMsg{
+				WrongLeader: false,
+				Err:         Err(fmt.Sprintf("[ShardCtrler-%d] %s timeout", sc.me, method)),
+			}
+		}
+	}
+}
+
+/*
+ShardCtrler是一个分布式的分片控制器，所以Join、Leave、Move、Query等操作需要使用raft进行共识
+*/
 func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
+	sc.lock()
+	defer sc.unlock()
+	// 幂等操作，过滤掉重复请求
+	if sc.isRepeated(args.ClientId, args.ReqId) {
+		reply.WrongLeader = false
+		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] get repeat request(%d) from [Cli-%d]",
+			sc.me, args.ReqId, args.ClientId))
+		return
+	}
+	_, _, is_leader := sc.rf.Start(Op{
+		ClientId: args.ClientId,
+		ReqId:    args.ReqId,
+		Args:     args.Servers,
+		Method:   Join,
+	})
+	if !is_leader {
+		reply.WrongLeader = true
+		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] is not a leader\n", sc.me))
+		return
+	}
+	sc.lastReq[args.ClientId] = args.ReqId
+	sc.addNotify(args.ClientId)
+	// 等待Raft集群共识前解锁，以提高系统的并发能力
+	sc.unlock()
+	resp_msg := sc.waitResp(args.ClientId, Join)
+	reply.WrongLeader = resp_msg.WrongLeader
+	reply.Err = resp_msg.Err
+	sc.lock()
+	// 由于分片客户端和服务器交流并不频繁，所以采用临时通道通信
+	sc.stopNotify(args.ClientId)
 }
 
 func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	// Your code here.
+	sc.lock()
+	defer sc.unlock()
+	_, _, is_leader := sc.rf.Start(Op{
+		ClientId: args.ClientId,
+		ReqId:    args.ReqId,
+		Args:     args.GIDs,
+		Method:   Leave,
+	})
+	if !is_leader {
+		reply.WrongLeader = true
+		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] is not a leader\n", sc.me))
+		return
+	}
+	sc.addNotify(args.ClientId)
+	// 等待Raft集群共识前解锁，以提高系统的并发能力
+	sc.unlock()
+	sc.waitResp(args.ClientId, Leave)
+	sc.lock()
+	// 由于分片客户端和服务器交流并不频繁，所以采用临时通道通信
+	sc.stopNotify(args.ClientId)
 }
 
 func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	// Your code here.
+	sc.lock()
+	defer sc.unlock()
+	_, _, is_leader := sc.rf.Start(Op{
+		ClientId: args.ClientId,
+		ReqId:    args.ReqId,
+		Args:     []int{args.Shard, args.GID},
+		Method:   Move,
+	})
+	if !is_leader {
+		reply.WrongLeader = true
+		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] is not a leader\n", sc.me))
+		return
+	}
+	sc.addNotify(args.ClientId)
+	// 等待Raft集群共识前解锁，以提高系统的并发能力
+	sc.unlock()
+	sc.waitResp(args.ClientId, Move)
+	sc.lock()
+	// 由于分片客户端和服务器交流并不频繁，所以采用临时通道通信
+	sc.stopNotify(args.ClientId)
 }
 
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
+	sc.handleQuery(args, reply)
 }
 
 func (sc *ShardCtrler) getConfig(idx int) Config {
@@ -88,26 +200,25 @@ func (sc *ShardCtrler) handleApplyCmd() {
 			op := msg.Command.(Op)
 			sc.lock()
 			isRepeated := sc.isRepeated(op.ClientId, op.ReqId)
-			var err Err
+			var notify NotifyMsg
+			// 幂等
 			if !isRepeated {
-
+				sc.unlock()
+				continue
+			}
+			// 处理不同种类的请求
+			switch op.Method {
+			case Join:
+				sc.handleJoin(&JoinArgs{ClientId: op.ClientId, ReqId: op.ReqId, Servers: op.Args.(map[int][]string)})
+			case Leave:
+				sc.handleLeave(&LeaveArgs{ClientId: op.ClientId, ReqId: op.ReqId, GIDs: op.Args.([]int)})
+			case Move:
+				args := op.Args.([]int)
+				sc.handleMove(&MoveArgs{ClientId: op.ClientId, ReqId: op.ReqId, Shard: args[0], GID: args[1]})
 			}
 			if ch, ok := sc.notifyChan[op.ClientId]; ok {
-				if len(ch) == 0 {
-					ch <- NotifyMsg{
-						WrongLeader: false,
-						Err:         err,
-					}
-				}
-				timeout := time.NewTimer(WaitOpTimeOut)
-				select {
-				case <-timeout.C:
-					DPrintf("follower=%d say I'm timeout\n", sc.me)
-				case ch <- NotifyMsg{
-					WrongLeader: false,
-					Err:         err,
-				}:
-				}
+				DPrintf("[ShardCtrler-%d] send notify to [cli-%d], details: %v\n", sc.me, op.ClientId, notify)
+				ch <- notify
 			}
 			sc.unlock()
 		}

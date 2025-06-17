@@ -49,7 +49,9 @@ func DPrintf(format string, a ...interface{}) {
 type Err string
 
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	ClientId int64
+	ReqId    ReqId
+	Servers  map[int][]string // new GID -> servers mappings
 }
 
 type JoinReply struct {
@@ -58,7 +60,9 @@ type JoinReply struct {
 }
 
 type LeaveArgs struct {
-	GIDs []int
+	ClientId int64
+	ReqId    ReqId
+	GIDs     []int
 }
 
 type LeaveReply struct {
@@ -67,8 +71,10 @@ type LeaveReply struct {
 }
 
 type MoveArgs struct {
-	Shard int
-	GID   int
+	ClientId int64
+	ReqId    ReqId
+	Shard    int
+	GID      int
 }
 
 type MoveReply struct {
