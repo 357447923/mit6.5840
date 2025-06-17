@@ -3,6 +3,7 @@ package shardctrler
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"6.5840/labgob"
@@ -22,6 +23,7 @@ const (
 type ShardCtrler struct {
 	mu      sync.Mutex
 	me      int
+	dead    int32
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 
@@ -82,6 +84,11 @@ func (sc *ShardCtrler) waitResp(clientId int64, method string) NotifyMsg {
 			}
 		}
 	}
+}
+
+func (sc *ShardCtrler) is_dead() bool {
+	z := atomic.LoadInt32(&sc.dead)
+	return z == 1
 }
 
 /*
@@ -190,7 +197,7 @@ func (sc *ShardCtrler) isRepeated(clientId int64, reqId ReqId) bool {
 }
 
 func (sc *ShardCtrler) handleApplyCmd() {
-	for {
+	for !sc.is_dead() {
 		select {
 		case msg := <-sc.applyCh:
 			DPrintf("server=%d handle msg, log=%v\n", sc.me, msg)
@@ -225,18 +232,89 @@ func (sc *ShardCtrler) handleApplyCmd() {
 	}
 }
 
+func rebalance(conf *Config) {
+	groups_size := 0
+	for range conf.Groups {
+		groups_size++
+	}
+	averge, leave := NShards/groups_size, NShards%groups_size
+	hold := make(map[int][]int)
+
+	for i := 0; i < NShards; i++ {
+		hold[conf.Shards[i]] = append(hold[conf.Shards[i]], i)
+	}
+	realloc := []int{}
+	need := make(map[int]int)
+	target_shards := make(map[int][]int)
+	// 对多余进行裁剪
+	for gid, shards := range hold {
+		shards_count := len(shards)
+		if shards_count > averge+1 && leave != 0 {
+			// 有余数的时候，意味着结果中有些节点多，有些节点少
+			// 所以将本身就多的节点保留average+1个
+			realloc = append(realloc, shards[averge+1:]...)
+			target_shards[gid] = shards[:averge+1]
+			leave--
+		} else {
+			need[gid] = shards_count - averge
+			target_shards[gid] = shards
+		}
+	}
+	// 对缺口进行分配
+	for gid := range hold {
+		need := need[gid]
+		if leave != 0 && need >= 0 {
+			target_shards[gid] = append(target_shards[gid], realloc[:need+1]...)
+			realloc = realloc[need+1:]
+			leave--
+		} else if need != 0 {
+			target_shards[gid] = append(target_shards[gid], realloc[:averge]...)
+			realloc = realloc[averge:]
+		}
+	}
+	// 不为0是错误，sleep用来排查
+	if leave != 0 {
+		fmt.Println("error, leave != 0")
+		time.Sleep(30 * time.Second)
+	}
+	for gid, shards := range hold {
+		for i := 0; i < len(shards); i++ {
+			conf.Shards[shards[i]] = gid
+		}
+	}
+}
+
 func (sc *ShardCtrler) handleJoin(args *JoinArgs) {
 	conf := sc.getConfig(-1)
 	conf.Num++
 	for k, v := range args.Servers {
 		conf.Groups[k] = v
 	}
-
+	rebalance(&conf)
 	sc.configs = append(sc.configs, conf)
 }
 
 func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
-
+	conf := sc.getConfig(-1)
+	for i := 0; i < len(args.GIDs); i++ {
+		delete(conf.Groups, args.GIDs[i])
+	}
+	need_resharp := []int{}
+	for i := 0; i < NShards; i++ {
+		if _, ok := conf.Groups[args.GIDs[i]]; ok {
+			need_resharp = append(need_resharp, i)
+		}
+	}
+	// 逐个分配
+	for j := 0; j < len(need_resharp); {
+		for gid := range conf.Groups {
+			conf.Shards[need_resharp[j]] = gid
+			j++
+			if j >= len(need_resharp) {
+				break
+			}
+		}
+	}
 }
 
 func (sc *ShardCtrler) handleMove(args *MoveArgs) {
@@ -258,6 +336,7 @@ func (sc *ShardCtrler) handleQuery(args *QueryArgs, reply *QueryReply) {
 func (sc *ShardCtrler) Kill() {
 	sc.rf.Kill()
 	// Your code here, if desired.
+	atomic.StoreInt32(&sc.dead, 1)
 }
 
 // needed by shardkv tester
@@ -275,12 +354,14 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 
 	sc.configs = make([]Config, 1)
 	sc.configs[0].Groups = map[int][]string{}
+	sc.lastReq = make(map[int64]ReqId)
+	sc.notifyChan = make(map[int64]chan NotifyMsg)
 
 	labgob.Register(Op{})
 	sc.applyCh = make(chan raft.ApplyMsg)
 	sc.rf = raft.Make(servers, me, persister, sc.applyCh)
 
 	// Your code here.
-
+	go sc.handleApplyCmd()
 	return sc
 }
