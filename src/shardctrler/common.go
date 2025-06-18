@@ -43,7 +43,6 @@ func DPrintf(format string, a ...interface{}) {
 	if Debug {
 		log.Printf(format, a...)
 	}
-	return
 }
 
 type Err string
@@ -83,7 +82,9 @@ type MoveReply struct {
 }
 
 type QueryArgs struct {
-	Num int // desired config number
+	ClientId int64
+	ReqId    ReqId
+	Num      int // desired config number
 }
 
 type QueryReply struct {

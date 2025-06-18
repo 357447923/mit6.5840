@@ -54,6 +54,7 @@ type Op struct {
 type NotifyMsg struct {
 	WrongLeader bool
 	Err         Err
+	// Config      Config
 }
 
 func (sc *ShardCtrler) addNotify(clientId int64) {
@@ -98,13 +99,6 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 	// Your code here.
 	sc.lock()
 	defer sc.unlock()
-	// 幂等操作，过滤掉重复请求
-	if sc.isRepeated(args.ClientId, args.ReqId) {
-		reply.WrongLeader = false
-		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] get repeat request(%d) from [Cli-%d]",
-			sc.me, args.ReqId, args.ClientId))
-		return
-	}
 	_, _, is_leader := sc.rf.Start(Op{
 		ClientId: args.ClientId,
 		ReqId:    args.ReqId,
@@ -116,7 +110,6 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] is not a leader\n", sc.me))
 		return
 	}
-	sc.lastReq[args.ClientId] = args.ReqId
 	sc.addNotify(args.ClientId)
 	// 等待Raft集群共识前解锁，以提高系统的并发能力
 	sc.unlock()
@@ -146,7 +139,9 @@ func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	sc.addNotify(args.ClientId)
 	// 等待Raft集群共识前解锁，以提高系统的并发能力
 	sc.unlock()
-	sc.waitResp(args.ClientId, Leave)
+	msg := sc.waitResp(args.ClientId, Leave)
+	reply.Err = msg.Err
+	reply.WrongLeader = msg.WrongLeader
 	sc.lock()
 	// 由于分片客户端和服务器交流并不频繁，所以采用临时通道通信
 	sc.stopNotify(args.ClientId)
@@ -170,7 +165,9 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	sc.addNotify(args.ClientId)
 	// 等待Raft集群共识前解锁，以提高系统的并发能力
 	sc.unlock()
-	sc.waitResp(args.ClientId, Move)
+	msg := sc.waitResp(args.ClientId, Move)
+	reply.Err = msg.Err
+	reply.WrongLeader = msg.WrongLeader
 	sc.lock()
 	// 由于分片客户端和服务器交流并不频繁，所以采用临时通道通信
 	sc.stopNotify(args.ClientId)
@@ -178,7 +175,26 @@ func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	// Your code here.
+	sc.lock()
+	defer sc.unlock()
+	_, _, is_leader := sc.rf.Start(Op{
+		ClientId: args.ClientId,
+		ReqId:    args.ReqId,
+		Args:     args.Num,
+		Method:   Query,
+	})
+	if !is_leader {
+		reply.WrongLeader = true
+		reply.Err = Err(fmt.Sprintf("[ShardCtrler-%d] is not a leader\n", sc.me))
+		return
+	}
+	sc.addNotify(args.ClientId)
+	sc.unlock()
+	// 这一步是保证Query时，Query之前的操作Join、Leave、Move操作都完成
+	sc.waitResp(args.ClientId, Query)
+	sc.lock()
 	sc.handleQuery(args, reply)
+	sc.stopNotify(args.ClientId)
 }
 
 func (sc *ShardCtrler) getConfig(idx int) Config {
@@ -207,12 +223,14 @@ func (sc *ShardCtrler) handleApplyCmd() {
 			op := msg.Command.(Op)
 			sc.lock()
 			isRepeated := sc.isRepeated(op.ClientId, op.ReqId)
-			var notify NotifyMsg
 			// 幂等
-			if !isRepeated {
+			if isRepeated {
+				fmt.Println("幂等操作触发")
 				sc.unlock()
 				continue
 			}
+			sc.lastReq[op.ClientId] = op.ReqId
+			var notify NotifyMsg
 			// 处理不同种类的请求
 			switch op.Method {
 			case Join:
@@ -222,8 +240,11 @@ func (sc *ShardCtrler) handleApplyCmd() {
 			case Move:
 				args := op.Args.([]int)
 				sc.handleMove(&MoveArgs{ClientId: op.ClientId, ReqId: op.ReqId, Shard: args[0], GID: args[1]})
+			case Query:
 			}
 			if ch, ok := sc.notifyChan[op.ClientId]; ok {
+				notify.Err = OK
+				notify.WrongLeader = false
 				DPrintf("[ShardCtrler-%d] send notify to [cli-%d], details: %v\n", sc.me, op.ClientId, notify)
 				ch <- notify
 			}
@@ -234,19 +255,30 @@ func (sc *ShardCtrler) handleApplyCmd() {
 
 func rebalance(conf *Config) {
 	groups_size := 0
-	for range conf.Groups {
-		groups_size++
-	}
-	averge, leave := NShards/groups_size, NShards%groups_size
+	// 所有groups各持有什么shard
 	hold := make(map[int][]int)
 
-	for i := 0; i < NShards; i++ {
-		hold[conf.Shards[i]] = append(hold[conf.Shards[i]], i)
+	for gid := range conf.Groups {
+		hold[gid] = []int{}
+		groups_size++
 	}
+	// 计算分片平均后，每个组平均应该有多少个分片，并且有多少个组需要比平均多一个分片
+	averge, leave := NShards/groups_size, NShards%groups_size
+	// 存放有多余shard的group在平衡后多余的shard，用于分配给shard不够的group
 	realloc := []int{}
+	for i := 0; i < NShards; i++ {
+		if conf.Shards[i] == 0 {
+			realloc = append(realloc, i)
+		} else {
+			hold[conf.Shards[i]] = append(hold[conf.Shards[i]], i)
+		}
+	}
+
+	// need为各个groups还需要多少个shard才平衡
 	need := make(map[int]int)
 	target_shards := make(map[int][]int)
 	// 对多余进行裁剪
+	// 裁剪和分配分成两次for循环是为了尽可能减少分片移动
 	for gid, shards := range hold {
 		shards_count := len(shards)
 		if shards_count > averge+1 && leave != 0 {
@@ -255,15 +287,19 @@ func rebalance(conf *Config) {
 			realloc = append(realloc, shards[averge+1:]...)
 			target_shards[gid] = shards[:averge+1]
 			leave--
+		} else if shards_count > averge && leave == 0 {
+			realloc = append(realloc, shards[averge:]...)
+			target_shards[gid] = shards[:averge]
 		} else {
-			need[gid] = shards_count - averge
-			target_shards[gid] = shards
+			// 不满一半的增加到avg需要的分片数
+			need[gid] = averge - shards_count
 		}
 	}
 	// 对缺口进行分配
 	for gid := range hold {
 		need := need[gid]
 		if leave != 0 && need >= 0 {
+			// 多分配一个, 缩小余数
 			target_shards[gid] = append(target_shards[gid], realloc[:need+1]...)
 			realloc = realloc[need+1:]
 			leave--
@@ -273,11 +309,12 @@ func rebalance(conf *Config) {
 		}
 	}
 	// 不为0是错误，sleep用来排查
+	fmt.Println("rebalance 完成")
 	if leave != 0 {
 		fmt.Println("error, leave != 0")
 		time.Sleep(30 * time.Second)
 	}
-	for gid, shards := range hold {
+	for gid, shards := range target_shards {
 		for i := 0; i < len(shards); i++ {
 			conf.Shards[shards[i]] = gid
 		}
@@ -296,25 +333,38 @@ func (sc *ShardCtrler) handleJoin(args *JoinArgs) {
 
 func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 	conf := sc.getConfig(-1)
+	vacant_sharp := []int{}
+	// 删除Leave的groups
+	// 并找出Leave的groups分配的分片
+	fmt.Println("Leave触发")
 	for i := 0; i < len(args.GIDs); i++ {
 		delete(conf.Groups, args.GIDs[i])
-	}
-	need_resharp := []int{}
-	for i := 0; i < NShards; i++ {
-		if _, ok := conf.Groups[args.GIDs[i]]; ok {
-			need_resharp = append(need_resharp, i)
-		}
-	}
-	// 逐个分配
-	for j := 0; j < len(need_resharp); {
-		for gid := range conf.Groups {
-			conf.Shards[need_resharp[j]] = gid
-			j++
-			if j >= len(need_resharp) {
-				break
+		for j := 0; j < NShards; j++ {
+			if conf.Shards[j] == args.GIDs[i] {
+				conf.Shards[j] = -1
+				vacant_sharp = append(vacant_sharp, j)
 			}
 		}
 	}
+	// Leave的两种情况：1. Leave之后还有剩余的组；2. Leave之后剩下0组
+	if len(conf.Groups) == 0 {
+		for i := 0; i < NShards; i++ {
+			conf.Shards[i] = 0
+		}
+	} else {
+		// 将这些为被分配的分片重新分配给其他组
+		for vacant := len(vacant_sharp); vacant > 0; {
+			for gid := range conf.Groups {
+				if vacant == 0 {
+					break
+				}
+				// 均匀分配
+				conf.Shards[vacant_sharp[vacant-1]] = gid
+				vacant--
+			}
+		}
+	}
+	sc.configs = append(sc.configs, conf)
 }
 
 func (sc *ShardCtrler) handleMove(args *MoveArgs) {
