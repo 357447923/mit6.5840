@@ -229,7 +229,6 @@ func (sc *ShardCtrler) handleApplyCmd() {
 				continue
 			}
 			sc.lastReq[op.ClientId] = op.ReqId
-			var notify NotifyMsg
 			// 处理不同种类的请求
 			switch op.Method {
 			case Join:
@@ -242,8 +241,10 @@ func (sc *ShardCtrler) handleApplyCmd() {
 			case Query:
 			}
 			if ch, ok := sc.notifyChan[op.ClientId]; ok {
-				notify.Err = OK
-				notify.WrongLeader = false
+				notify := NotifyMsg{
+					WrongLeader: false,
+					Err:         OK,
+				}
 				DPrintf("[ShardCtrler-%d] send notify to [cli-%d], details: %v\n", sc.me, op.ClientId, notify)
 				ch <- notify
 			}

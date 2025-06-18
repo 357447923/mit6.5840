@@ -27,7 +27,7 @@ func nrand() int64 {
 	return x
 }
 
-func (ck *Clerk) getReqId() ReqId {
+func (ck *Clerk) getAndIncReqId() ReqId {
 	id := ck.reqId
 	ck.reqId++
 	return id
@@ -48,7 +48,7 @@ func (ck *Clerk) Query(num int) Config {
 	// Your code here.
 	args.Num = num
 	args.ClientId = ck.clientId
-	args.ReqId = ck.getReqId()
+	args.ReqId = ck.getAndIncReqId()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -67,7 +67,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 	// Your code here.
 	args.Servers = servers
 	args.ClientId = ck.clientId
-	args.ReqId = ck.getReqId()
+	args.ReqId = ck.getAndIncReqId()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -86,7 +86,7 @@ func (ck *Clerk) Leave(gids []int) {
 	// Your code here.
 	args.GIDs = gids
 	args.ClientId = ck.clientId
-	args.ReqId = ck.getReqId()
+	args.ReqId = ck.getAndIncReqId()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {
@@ -106,7 +106,7 @@ func (ck *Clerk) Move(shard int, gid int) {
 	args.Shard = shard
 	args.GID = gid
 	args.ClientId = ck.clientId
-	args.ReqId = ck.getReqId()
+	args.ReqId = ck.getAndIncReqId()
 	for {
 		// try each known server.
 		for _, srv := range ck.servers {

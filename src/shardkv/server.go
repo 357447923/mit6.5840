@@ -1,22 +1,36 @@
 package shardkv
 
+import (
+	"sync"
+	"sync/atomic"
+	"time"
 
-import "6.5840/labrpc"
-import "6.5840/raft"
-import "sync"
-import "6.5840/labgob"
+	"6.5840/labgob"
+	"6.5840/labrpc"
+	"6.5840/raft"
+)
 
-
+const WaitOpTimeOut = 500 * time.Millisecond
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int64
+	ReqId    ReqId
+	Args     interface{}
+	Method   string
+}
+
+type NotifyMsg struct {
+	WrongLeader bool
+	Err         string
 }
 
 type ShardKV struct {
 	mu           sync.Mutex
 	me           int
+	dead         int32
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
 	make_end     func(string) *labrpc.ClientEnd
@@ -25,15 +39,72 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	lastReq    map[int64]ReqId
+	notifyChan map[int64]chan NotifyMsg
 }
 
+func (kv *ShardKV) lock() {
+	kv.mu.Lock()
+}
+
+func (kv *ShardKV) unlock() {
+	kv.mu.Unlock()
+}
+
+func (kv *ShardKV) is_repeated(clientId int64, reqId ReqId) bool {
+	if val, ok := kv.lastReq[clientId]; ok {
+		return val == reqId
+	}
+	return false
+}
+
+func (kv *ShardKV) is_killed() bool {
+	z := atomic.LoadInt32(&kv.dead)
+	return z == 1
+}
+
+func (kv *ShardKV) handleApply() {
+	for !kv.is_killed() {
+		select {
+		case msg := <-kv.applyCh:
+			if !msg.CommandValid {
+				continue
+			}
+			op := msg.Command.(Op)
+			kv.lock()
+			if kv.is_repeated(op.ClientId, op.ReqId) {
+				kv.unlock()
+				continue
+			}
+			switch op.Method {
+			case Get:
+
+			case Put:
+
+			}
+			notify_msg := NotifyMsg{
+				WrongLeader: false,
+				Err:         OK,
+			}
+			if ch, ok := kv.notifyChan[op.ClientId]; ok {
+				ch <- notify_msg
+			}
+			kv.unlock()
+		}
+	}
+}
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	kv.lock()
+	defer kv.unlock()
+	kv.rf.Start(Op{})
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	kv.lock()
+	defer kv.unlock()
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -43,8 +114,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
 	// Your code here, if desired.
+	atomic.StoreInt32(&kv.dead, 1)
 }
-
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -91,7 +162,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	kv.lastReq = make(map[int64]ReqId)
+	kv.notifyChan = make(map[int64]chan NotifyMsg)
+	go kv.handleApply()
 
 	return kv
 }
