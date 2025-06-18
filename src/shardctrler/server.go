@@ -216,7 +216,6 @@ func (sc *ShardCtrler) handleApplyCmd() {
 	for !sc.is_dead() {
 		select {
 		case msg := <-sc.applyCh:
-			DPrintf("server=%d handle msg, log=%v\n", sc.me, msg)
 			if !msg.CommandValid {
 				continue
 			}
@@ -279,6 +278,7 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 	target_shards := make(map[int][]int)
 	// 对多余进行裁剪
 	// 裁剪和分配分成两次for循环是为了尽可能减少分片移动
+	// 并且分片最多的组和最少的组差距<=1
 	for gid, shards := range hold {
 		shards_count := len(shards)
 		if shards_count > averge+1 && leave != 0 {
@@ -286,6 +286,9 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 			// 所以将本身就多的节点保留average+1个
 			realloc = append(realloc, shards[averge+1:]...)
 			target_shards[gid] = shards[:averge+1]
+			leave--
+		} else if shards_count == averge+1 && leave != 0 {
+			need[gid] = 0
 			leave--
 		} else if shards_count > averge && leave == 0 {
 			realloc = append(realloc, shards[averge:]...)
@@ -295,6 +298,14 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 			need[gid] = averge - shards_count
 		}
 	}
+	need_count := 0
+	for _, count := range need {
+		if count < 0 {
+			fmt.Printf("[ShardCtrler-%d] has err, count: %d < 0\n", sc.me, count)
+		}
+		need_count += count
+	}
+	DPrintf("[ShardCtrler-%d] need_count=%d, realloc_count=%d\n", sc.me, need_count, len(realloc))
 	// 对缺口进行分配
 	for gid := range hold {
 		need := need[gid]
@@ -304,8 +315,8 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 			realloc = realloc[need+1:]
 			leave--
 		} else if need != 0 {
-			target_shards[gid] = append(target_shards[gid], realloc[:averge]...)
-			realloc = realloc[averge:]
+			target_shards[gid] = append(target_shards[gid], realloc[:need]...)
+			realloc = realloc[need:]
 		}
 	}
 	// 不为0是错误，sleep用来排查
@@ -331,11 +342,11 @@ func (sc *ShardCtrler) handleJoin(args *JoinArgs) {
 	}
 	conf.Groups = groups
 	// 深拷贝完成
+	DPrintf("[ShardCtrler-%d] 通过Join操作生成 [config-%d]\n", sc.me, conf.Num)
 	for k, v := range args.Servers {
 		conf.Groups[k] = v
 	}
 	sc.rebalance(&conf)
-	DPrintf("[ShardCtrler-%d] [config-%d] 生成\n", sc.me, conf.Num)
 	sc.configs = append(sc.configs, conf)
 }
 
@@ -349,15 +360,16 @@ func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 	}
 	conf.Groups = groups
 	// 深拷贝完成
-	vacant_sharp := []int{}
+	DPrintf("[ShardCtrler-%d] 通过Leave操作生成 [config-%d]\n", sc.me, conf.Num)
+	// vacant_sharp := []int{}
 	// 删除Leave的groups
 	// 并找出Leave的groups分配的分片
 	for i := 0; i < len(args.GIDs); i++ {
 		delete(conf.Groups, args.GIDs[i])
 		for j := 0; j < NShards; j++ {
 			if conf.Shards[j] == args.GIDs[i] {
-				conf.Shards[j] = -1
-				vacant_sharp = append(vacant_sharp, j)
+				conf.Shards[j] = 0
+				// vacant_sharp = append(vacant_sharp, j)
 			}
 		}
 	}
@@ -368,23 +380,16 @@ func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 		}
 	} else {
 		// 将这些为被分配的分片重新分配给其他组
-		for vacant := len(vacant_sharp); vacant > 0; {
-			for gid := range conf.Groups {
-				if vacant == 0 {
-					break
-				}
-				// 均匀分配
-				conf.Shards[vacant_sharp[vacant-1]] = gid
-				vacant--
-			}
-		}
+		sc.rebalance(&conf)
 	}
-	DPrintf("[ShardCtrler-%d] [config-%d] 生成\n", sc.me, conf.Num)
 	sc.configs = append(sc.configs, conf)
 }
 
 func (sc *ShardCtrler) handleMove(args *MoveArgs) {
-
+	conf := sc.getConfig(-1)
+	// 由于Move不会修改map，故不需要深拷贝
+	conf.Shards[args.Shard] = args.GID
+	sc.configs = append(sc.configs, conf)
 }
 
 func (sc *ShardCtrler) handleQuery(args *QueryArgs, reply *QueryReply) {
