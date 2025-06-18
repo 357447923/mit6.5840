@@ -225,7 +225,7 @@ func (sc *ShardCtrler) handleApplyCmd() {
 			isRepeated := sc.isRepeated(op.ClientId, op.ReqId)
 			// 幂等
 			if isRepeated {
-				fmt.Println("幂等操作触发")
+				DPrintf("[ShardCtrler-%d] 幂等操作触发\n", sc.me)
 				sc.unlock()
 				continue
 			}
@@ -253,7 +253,7 @@ func (sc *ShardCtrler) handleApplyCmd() {
 	}
 }
 
-func rebalance(conf *Config) {
+func (sc *ShardCtrler) rebalance(conf *Config) {
 	groups_size := 0
 	// 所有groups各持有什么shard
 	hold := make(map[int][]int)
@@ -309,7 +309,7 @@ func rebalance(conf *Config) {
 		}
 	}
 	// 不为0是错误，sleep用来排查
-	fmt.Println("rebalance 完成")
+	// DPrintf("[ShardCtrler-%d] rebalance 完成\n", sc.me)
 	if leave != 0 {
 		fmt.Println("error, leave != 0")
 		time.Sleep(30 * time.Second)
@@ -324,19 +324,34 @@ func rebalance(conf *Config) {
 func (sc *ShardCtrler) handleJoin(args *JoinArgs) {
 	conf := sc.getConfig(-1)
 	conf.Num++
+	// conf := sc.getConfig(-1) 中map为浅拷贝，要深拷贝
+	groups := make(map[int][]string, len(conf.Groups))
+	for k, v := range conf.Groups {
+		groups[k] = v
+	}
+	conf.Groups = groups
+	// 深拷贝完成
 	for k, v := range args.Servers {
 		conf.Groups[k] = v
 	}
-	rebalance(&conf)
+	sc.rebalance(&conf)
+	DPrintf("[ShardCtrler-%d] [config-%d] 生成\n", sc.me, conf.Num)
 	sc.configs = append(sc.configs, conf)
 }
 
 func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 	conf := sc.getConfig(-1)
+	conf.Num++
+	// conf := sc.getConfig(-1) 中map为浅拷贝，要深拷贝
+	groups := make(map[int][]string, len(conf.Groups))
+	for k, v := range conf.Groups {
+		groups[k] = v
+	}
+	conf.Groups = groups
+	// 深拷贝完成
 	vacant_sharp := []int{}
 	// 删除Leave的groups
 	// 并找出Leave的groups分配的分片
-	fmt.Println("Leave触发")
 	for i := 0; i < len(args.GIDs); i++ {
 		delete(conf.Groups, args.GIDs[i])
 		for j := 0; j < NShards; j++ {
@@ -364,6 +379,7 @@ func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 			}
 		}
 	}
+	DPrintf("[ShardCtrler-%d] [config-%d] 生成\n", sc.me, conf.Num)
 	sc.configs = append(sc.configs, conf)
 }
 

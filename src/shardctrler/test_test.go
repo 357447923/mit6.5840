@@ -61,7 +61,7 @@ func check_same_config(t *testing.T, c1 Config, c2 Config) {
 		t.Fatalf("Shards wrong")
 	}
 	if len(c1.Groups) != len(c2.Groups) {
-		t.Fatalf("number of Groups is wrong, c1's len = %d, c2's len = %d", len(c1.Groups), len(c2.Groups))
+		t.Fatalf("number of Groups is wrong")
 	}
 	for gid, sa := range c1.Groups {
 		sa1, ok := c2.Groups[gid]
@@ -127,6 +127,9 @@ func TestBasic(t *testing.T) {
 		cfg.ShutdownServer(s)
 		for i := 0; i < len(cfa); i++ {
 			c := ck.Query(cfa[i].Num)
+			if len(cfa[i].Groups) != len(c.Groups) {
+				t.Fatalf("number of Groups is wrong, [c1=%v], [c2=%v]", cfa[i], c)
+			}
 			check_same_config(t, c, cfa[i])
 		}
 		cfg.StartServer(s)
