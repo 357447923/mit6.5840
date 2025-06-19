@@ -10,6 +10,7 @@ package shardkv
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -65,6 +66,10 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	// You'll have to add code here.
 	ck.clientId = nrand()
 	ck.reqId = (ReqId(nrand()))
+	for ck.config.Num == 0 {
+		time.Sleep(100 * time.Millisecond)
+		ck.config = ck.sm.Query(-1)
+	}
 	return ck
 }
 
@@ -122,6 +127,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				fmt.Printf("[client] put finish, reply.Err=%s\n", reply.Err)
 				if ok && reply.Err == OK {
 					return
 				}

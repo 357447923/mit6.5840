@@ -1,5 +1,7 @@
 package shardkv
 
+import "fmt"
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running Raft.
@@ -9,9 +11,12 @@ package shardkv
 // You will have to modify these definitions.
 //
 
+const DEBUG = false
+
 const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
+	ErrTimeout     = "ErrTimeout"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 )
@@ -52,4 +57,10 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+func Dprintf(ft string, a ...interface{}) {
+	if DEBUG {
+		fmt.Printf(ft, a...)
+	}
 }

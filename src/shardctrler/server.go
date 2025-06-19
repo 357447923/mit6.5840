@@ -2,6 +2,7 @@ package shardctrler
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,9 +72,12 @@ func (sc *ShardCtrler) stopNotify(clientId int64) {
 }
 
 func (sc *ShardCtrler) waitResp(clientId int64, method string) NotifyMsg {
+	sc.lock()
+	ch := sc.notifyChan[clientId]
+	sc.unlock()
 	wait_timer := time.NewTimer(WaitOpTimeOut)
 	select {
-	case resp := <-sc.notifyChan[clientId]:
+	case resp := <-ch:
 		{
 			return resp
 		}
@@ -254,14 +258,17 @@ func (sc *ShardCtrler) handleApplyCmd() {
 }
 
 func (sc *ShardCtrler) rebalance(conf *Config) {
-	groups_size := 0
+	groups_size := len(conf.Groups)
 	// 所有groups各持有什么shard
 	hold := make(map[int][]int)
-
+	gids := make([]int, groups_size)
+	i := 0
 	for gid := range conf.Groups {
 		hold[gid] = []int{}
-		groups_size++
+		gids[i] = gid
+		i++
 	}
+	sort.Ints(gids)
 	// 计算分片平均后，每个组平均应该有多少个分片，并且有多少个组需要比平均多一个分片
 	averge, leave := NShards/groups_size, NShards%groups_size
 	// 存放有多余shard的group在平衡后多余的shard，用于分配给shard不够的group
@@ -280,7 +287,8 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 	// 对多余进行裁剪
 	// 裁剪和分配分成两次for循环是为了尽可能减少分片移动
 	// 并且分片最多的组和最少的组差距<=1
-	for gid, shards := range hold {
+	for _, gid := range gids {
+		shards := hold[gid]
 		shards_count := len(shards)
 		if shards_count > averge+1 && leave != 0 {
 			// 有余数的时候，意味着结果中有些节点多，有些节点少
@@ -307,8 +315,9 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 		need_count += count
 	}
 	DPrintf("[ShardCtrler-%d] need_count=%d, realloc_count=%d\n", sc.me, need_count, len(realloc))
+	// gids 和 realloc进行sort用于避免map遍历无序的问题
 	// 对缺口进行分配
-	for gid := range hold {
+	for _, gid := range gids {
 		need := need[gid]
 		if leave != 0 && need >= 0 {
 			// 多分配一个, 缩小余数
@@ -362,7 +371,6 @@ func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 	conf.Groups = groups
 	// 深拷贝完成
 	DPrintf("[ShardCtrler-%d] 通过Leave操作生成 [config-%d]\n", sc.me, conf.Num)
-	// vacant_sharp := []int{}
 	// 删除Leave的groups
 	// 并找出Leave的groups分配的分片
 	for i := 0; i < len(args.GIDs); i++ {
@@ -370,7 +378,6 @@ func (sc *ShardCtrler) handleLeave(args *LeaveArgs) {
 		for j := 0; j < NShards; j++ {
 			if conf.Shards[j] == args.GIDs[i] {
 				conf.Shards[j] = 0
-				// vacant_sharp = append(vacant_sharp, j)
 			}
 		}
 	}
