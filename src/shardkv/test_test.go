@@ -58,6 +58,7 @@ func TestStaticShards(t *testing.T) {
 			if v != va[i] {
 				ch <- fmt.Sprintf("Get(%v): expected:\n%v\nreceived:\n%v", ka[i], va[i], v)
 			} else {
+				// fmt.Println("写入\"\"")
 				ch <- ""
 			}
 		}(xi)

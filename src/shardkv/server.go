@@ -46,13 +46,16 @@ type ShardKV struct {
 	data       map[string]string
 	clerk      *shardctrler.Clerk
 	config     shardctrler.Config // 或许可以定时请求配置加客户端发送了个请求后发现不是本节点时请求最新config
+	able       int32              // 该服务器是否可用
 }
 
 func (kv *ShardKV) lock() {
+	// fmt.Printf("[ShardKV-%d] lock\n", kv.me)
 	kv.mu.Lock()
 }
 
 func (kv *ShardKV) unlock() {
+	// fmt.Printf("[ShardKV-%d] unlock\n", kv.me)
 	kv.mu.Unlock()
 }
 
@@ -65,7 +68,7 @@ func (kv *ShardKV) is_repeated(clientId int64, reqId ReqId) bool {
 
 func (kv *ShardKV) addNotifyNotExist(clientId int64) {
 	if _, ok := kv.notifyChan[clientId]; !ok {
-		kv.notifyChan[clientId] = make(chan NotifyMsg)
+		kv.notifyChan[clientId] = make(chan NotifyMsg, 10)
 	}
 }
 
@@ -83,11 +86,19 @@ func (kv *ShardKV) is_killed() bool {
 }
 
 func (kv *ShardKV) waitResp(clientId int64) (msg NotifyMsg) {
+	// fmt.Printf("[ShardKV-%d] lock\n", kv.me)
+	kv.lock()
+	ch := kv.notifyChan[clientId]
+	// fmt.Printf("[ShardKV-%d] unlock\n", kv.me)
+	kv.unlock()
 	timeOut := time.NewTimer(WaitOpTimeOut)
 	select {
-	case msg = <-kv.notifyChan[clientId]:
+	case msg = <-ch:
+		// fmt.Printf("[ShardKV-%d] 收到了notify\n", kv.me)
 	case <-timeOut.C:
 		msg.Err = ErrTimeout
+		kv.stop_notify(clientId)
+		// fmt.Printf("[ShardKV-%d] 超时\n", kv.me)
 	}
 	return
 }
@@ -112,7 +123,9 @@ func (kv *ShardKV) handleGet(key string, reply *GetReply) {
 }
 
 func (kv *ShardKV) handlePut(key string, value string) {
+	// fmt.Printf("[ShardKV-%d-%d] before put [%s:%s], cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
 	kv.data[key] = value
+	// fmt.Printf("[ShardKV-%d-%d] put [%s:%s] cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
 }
 
 func (kv *ShardKV) handleAppend(key string, value string) {
@@ -131,39 +144,49 @@ func (kv *ShardKV) handleApply() {
 			kv.lock()
 			if kv.is_repeated(op.ClientId, op.ReqId) {
 				kv.unlock()
-				fmt.Printf("[ShardKV-%d] 去重\n", kv.me)
+				Dprintf("[ShardKV-%d-%d] 去重\n", kv.gid, kv.me)
 				continue
 			}
 			kv.lastReq[op.ClientId] = op.ReqId
-			fmt.Printf("[ShardKV-%d] 正在处理 %v\n", kv.me, msg)
 			switch op.Method {
 			case Get:
 				key := op.Args.(string)
-				if !kv.isExchange(op.ClientId) && !kv.keyBelongGroups(key) {
-					notify_msg.Err = ErrWrongGroup
-				}
-				notify_msg.Err = OK
-			case Put:
-				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
-				if !kv.isExchange(op.ClientId) && !kv.keyBelongGroups(key) {
+				if !kv.keyBelongGroups(key) {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
+				fmt.Printf("[ShardKV-%d-%d], 正在处理 %v, data:%v, pointer=%p\n", kv.gid, kv.me, op, kv.data, &kv.data)
+				notify_msg.Err = OK
+			case Put:
+				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
+				if !kv.keyBelongGroups(key) {
+					notify_msg.Err = ErrWrongGroup
+					break
+				}
+				// fmt.Printf("[ShardKV-%d-%d] 当前配置为：%v\n", kv.gid, kv.me, kv.config.Shards)
+				// fmt.Printf("[ShardKV-%d-%d] 正在处理 %v\n", kv.gid, kv.me, op)
 				kv.handlePut(key, value)
 				notify_msg.Err = OK
 			case Append:
 				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
-				if !kv.isExchange(op.ClientId) && !kv.keyBelongGroups(key) {
+				if !kv.keyBelongGroups(key) {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
+				fmt.Printf("[ShardKV-%d-%d] 正在处理 %v\n", kv.gid, kv.me, op)
 				kv.handleAppend(key, value)
 				notify_msg.Err = OK
 			}
 			if ch, ok := kv.notifyChan[op.ClientId]; ok {
-				ch <- notify_msg
-				fmt.Printf("[ShardKV-%d] 获取到了notify_chan\n", kv.me)
+				_, isLeader := kv.rf.GetState()
+				if !isLeader {
+					kv.stop_notify(op.ClientId)
+				} else {
+					// fmt.Printf("[ShardKV-%d] 获取到了notify_chan\n", kv.me)
+					ch <- notify_msg // bug: 写不进去
+				}
 			}
+			// fmt.Printf("[ShardKV-%d] 处理 %v 完成\n", kv.me, op)
 			kv.unlock()
 		}
 	}
@@ -173,33 +196,29 @@ func (kv *ShardKV) refreshConf() {
 	conf := kv.clerk.Query(-1)
 	kv.lock()
 	defer kv.unlock()
-	if kv.config.Num == conf.Num {
+	if conf.Num == 0 || kv.config.Num == conf.Num {
 		return
 	}
+	kv.able = 0
 	_, is_leader := kv.rf.GetState()
 	if !is_leader {
+		kv.able = 1
 		kv.config = conf
 		return
 	}
-	// 让Leader做分片迁移
-	// 分片迁移
-	/*myNewShards := []int{}
-	myOldShards := []int{}
-	for shard, gid := range kv.config.Shards {
-		if gid == kv.gid {
-			myOldShards = append(myOldShards, shard)
-		}
-	}
-	for shard, gid := range conf.Shards {
-		if gid == kv.gid {
-			myNewShards = append(myNewShards, shard)
-		}
-	}
-
-	kv.unlock()*/
+	kv.config = conf
+	kv.able = 1
+	fmt.Printf("[ShardKV-%d-%d] 接收到 [Conf-%d]: shard:%v\n", kv.gid, kv.me, conf.Num, conf.Shards)
 }
 
-func (kv *ShardKV) timedRefresh() {
+func (kv *ShardKV) refreshTask() {
+	if atomic.LoadInt32(&kv.able) == 0 {
+		for kv.config.Num != 0 {
+			time.Sleep(200 * time.Millisecond)
+			kv.refreshConf()
+		}
+		atomic.StoreInt32(&kv.able, 1)
+	}
 	ticker := time.NewTicker(RefreshLap)
 	for !kv.is_killed() {
 		select {
@@ -212,6 +231,8 @@ func (kv *ShardKV) timedRefresh() {
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	for atomic.LoadInt32(&kv.able) == 0 {
+	}
 	kv.lock()
 	defer kv.unlock()
 	_, _, is_leader := kv.rf.Start(Op{
@@ -233,11 +254,17 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	kv.lock()
+	fmt.Printf("[ShardKV-%d-%d] GET key=%s, value=%s\ndata=%v\n", kv.gid, kv.me, args.Key, reply.Value, kv.data)
 	kv.handleGet(args.Key, reply)
+	// if reply.Value == "" {
+	// 	fmt.Printf("[ShardKV-%d-%d] WARN: key=%s, value=%s\ndata=%v\n", kv.gid, kv.me, args.Key, reply.Value, kv.data)
+	// }
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	for atomic.LoadInt32(&kv.able) == 0 {
+	}
 	kv.lock()
 	defer kv.unlock()
 	_, _, is_leader := kv.rf.Start(Op{
@@ -254,7 +281,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.unlock()
 	reply.Err = kv.waitResp(args.ClientId).Err
 	if reply.Err == OK {
-		fmt.Printf("[ShardKV-%d] 返回了OK\n", kv.me)
+		Dprintf("[ShardKV-%d] 返回了OK\n", kv.me)
 	}
 	kv.lock()
 }
@@ -311,19 +338,15 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	// Use something like this to talk to the shardctrler:
 	// kv.mck = shardctrler.MakeClerk(kv.ctrlers)
-
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.lastReq = make(map[int64]ReqId)
 	kv.notifyChan = make(map[int64]chan NotifyMsg)
 	kv.clerk = shardctrler.MakeClerk(kv.ctrlers)
 	kv.data = make(map[string]string)
-	for kv.config.Num == 0 {
-		time.Sleep(100 * time.Millisecond)
-		kv.config = kv.clerk.Query(-1)
-	}
-
-	go kv.timedRefresh()
+	kv.able = 0
+	fmt.Printf("创建ShardKV-%d-%d\n", kv.gid, kv.me)
+	go kv.refreshTask()
 	go kv.handleApply()
 
 	return kv

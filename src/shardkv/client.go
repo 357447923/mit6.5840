@@ -66,10 +66,7 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	// You'll have to add code here.
 	ck.clientId = nrand()
 	ck.reqId = (ReqId(nrand()))
-	for ck.config.Num == 0 {
-		time.Sleep(100 * time.Millisecond)
-		ck.config = ck.sm.Query(-1)
-	}
+
 	return ck
 }
 
@@ -96,6 +93,7 @@ func (ck *Clerk) Get(key string) string {
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
+					fmt.Printf("wrongGroup\n")
 					break
 				}
 				// ... not ok, or ErrWrongLeader

@@ -224,12 +224,10 @@ func (sc *ShardCtrler) handleApplyCmd() {
 				continue
 			}
 			op := msg.Command.(Op)
-			sc.lock()
 			isRepeated := sc.isRepeated(op.ClientId, op.ReqId)
 			// 幂等
 			if isRepeated {
 				DPrintf("[ShardCtrler-%d] 幂等操作触发\n", sc.me)
-				sc.unlock()
 				continue
 			}
 			sc.lastReq[op.ClientId] = op.ReqId
@@ -244,6 +242,7 @@ func (sc *ShardCtrler) handleApplyCmd() {
 				sc.handleMove(&MoveArgs{ClientId: op.ClientId, ReqId: op.ReqId, Shard: args[0], GID: args[1]})
 			case Query:
 			}
+			sc.lock()
 			if ch, ok := sc.notifyChan[op.ClientId]; ok {
 				notify := NotifyMsg{
 					WrongLeader: false,
@@ -310,7 +309,7 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 	need_count := 0
 	for _, count := range need {
 		if count < 0 {
-			fmt.Printf("[ShardCtrler-%d] has err, count: %d < 0\n", sc.me, count)
+			DPrintf("[ShardCtrler-%d] has err, count: %d < 0\n", sc.me, count)
 		}
 		need_count += count
 	}
@@ -332,7 +331,7 @@ func (sc *ShardCtrler) rebalance(conf *Config) {
 	// 不为0是错误，sleep用来排查
 	// DPrintf("[ShardCtrler-%d] rebalance 完成\n", sc.me)
 	if leave != 0 {
-		fmt.Println("error, leave != 0")
+		DPrintf("error, leave != 0\n")
 		time.Sleep(30 * time.Second)
 	}
 	for gid, shards := range target_shards {
