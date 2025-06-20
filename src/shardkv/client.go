@@ -10,7 +10,6 @@ package shardkv
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 	"time"
 
@@ -93,8 +92,13 @@ func (ck *Clerk) Get(key string) string {
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
-					fmt.Printf("wrongGroup\n")
+					// fmt.Printf("wrongGroup\n")
 					break
+				}
+				if ok && (reply.Err == ErrNoAble) {
+					// fmt.Println("ErrNoAble, 等待重试")
+					si--
+					time.Sleep(100 * time.Microsecond)
 				}
 				// ... not ok, or ErrWrongLeader
 			}
@@ -125,12 +129,16 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				fmt.Printf("[client] put finish, reply.Err=%s\n", reply.Err)
+				// fmt.Printf("[client] put finish, reply.Err=%s\n", reply.Err)
 				if ok && reply.Err == OK {
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
 					break
+				}
+				if ok && reply.Err == ErrNoAble {
+					si--
+					time.Sleep(100 * time.Millisecond)
 				}
 				// ... not ok, or ErrWrongLeader
 			}

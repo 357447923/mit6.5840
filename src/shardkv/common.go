@@ -19,6 +19,7 @@ const (
 	ErrTimeout     = "ErrTimeout"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrNoAble      = "ErrNoAble"
 )
 
 const (

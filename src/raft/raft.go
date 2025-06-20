@@ -151,6 +151,11 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isLeader
 }
 
+func (rf *Raft) GetCommitIdx() (idx int) {
+	idx = rf.commitIndex
+	return
+}
+
 func (rf *Raft) changeRole(role Role) {
 	switch role {
 	case CANDIDATE:

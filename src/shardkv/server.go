@@ -41,12 +41,14 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	persister  raft.Persister
 	lastReq    map[int64]ReqId
 	notifyChan map[int64]chan NotifyMsg
 	data       map[string]string
 	clerk      *shardctrler.Clerk
 	config     shardctrler.Config // 或许可以定时请求配置加客户端发送了个请求后发现不是本节点时请求最新config
-	able       int32              // 该服务器是否可用
+	confAble   int32              // 配置是否可用
+	applyAble  int32              // 日志重放是否完成
 }
 
 func (kv *ShardKV) lock() {
@@ -123,9 +125,9 @@ func (kv *ShardKV) handleGet(key string, reply *GetReply) {
 }
 
 func (kv *ShardKV) handlePut(key string, value string) {
-	// fmt.Printf("[ShardKV-%d-%d] before put [%s:%s], cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
+	Dprintf("[ShardKV-%d-%d] before put [%s:%s], cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
 	kv.data[key] = value
-	// fmt.Printf("[ShardKV-%d-%d] put [%s:%s] cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
+	Dprintf("[ShardKV-%d-%d] put [%s:%s] cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
 }
 
 func (kv *ShardKV) handleAppend(key string, value string) {
@@ -133,6 +135,11 @@ func (kv *ShardKV) handleAppend(key string, value string) {
 }
 
 func (kv *ShardKV) handleApply() {
+	if kv.rf.GetCommitIdx() == 0 {
+		kv.lock()
+		kv.applyAble = 1
+		kv.unlock()
+	}
 	for !kv.is_killed() {
 		select {
 		case msg := <-kv.applyCh:
@@ -141,9 +148,8 @@ func (kv *ShardKV) handleApply() {
 			}
 			op := msg.Command.(Op)
 			var notify_msg NotifyMsg
-			kv.lock()
+
 			if kv.is_repeated(op.ClientId, op.ReqId) {
-				kv.unlock()
 				Dprintf("[ShardKV-%d-%d] 去重\n", kv.gid, kv.me)
 				continue
 			}
@@ -151,15 +157,15 @@ func (kv *ShardKV) handleApply() {
 			switch op.Method {
 			case Get:
 				key := op.Args.(string)
-				if !kv.keyBelongGroups(key) {
+				if kv.applyAble == 1 && !kv.keyBelongGroups(key) {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
-				fmt.Printf("[ShardKV-%d-%d], 正在处理 %v, data:%v, pointer=%p\n", kv.gid, kv.me, op, kv.data, &kv.data)
+				Dprintf("[ShardKV-%d-%d], 正在处理 %v, data:%v\n", kv.gid, kv.me, op, kv.data)
 				notify_msg.Err = OK
 			case Put:
 				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
-				if !kv.keyBelongGroups(key) {
+				if kv.applyAble == 1 && !kv.keyBelongGroups(key) {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
@@ -169,14 +175,15 @@ func (kv *ShardKV) handleApply() {
 				notify_msg.Err = OK
 			case Append:
 				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
-				if !kv.keyBelongGroups(key) {
+				if kv.applyAble == 1 && !kv.keyBelongGroups(key) {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
-				fmt.Printf("[ShardKV-%d-%d] 正在处理 %v\n", kv.gid, kv.me, op)
+				// fmt.Printf("[ShardKV-%d-%d] 正在处理 %v\n", kv.gid, kv.me, op)
 				kv.handleAppend(key, value)
 				notify_msg.Err = OK
 			}
+			kv.lock()
 			if ch, ok := kv.notifyChan[op.ClientId]; ok {
 				_, isLeader := kv.rf.GetState()
 				if !isLeader {
@@ -186,7 +193,16 @@ func (kv *ShardKV) handleApply() {
 					ch <- notify_msg // bug: 写不进去
 				}
 			}
-			// fmt.Printf("[ShardKV-%d] 处理 %v 完成\n", kv.me, op)
+			// 确定重放完成后启动服务
+			if kv.applyAble == 0 {
+				Dprintf("[ShardKV-%d-%d] 重放 %v\n", kv.gid, kv.me, op)
+				commitIdx := kv.rf.GetCommitIdx()
+				if msg.CommandIndex == commitIdx {
+					Dprintf("[ShardKV-%d-%d] 重放完成, data: %v\n", kv.gid, kv.me, kv.data)
+					kv.applyAble = 1
+				}
+			}
+			// fmt.Printf("[ShardKV-%d-%d] 处理 %v 完成\n", kv.gid, kv.me, op)
 			kv.unlock()
 		}
 	}
@@ -194,30 +210,39 @@ func (kv *ShardKV) handleApply() {
 
 func (kv *ShardKV) refreshConf() {
 	conf := kv.clerk.Query(-1)
-	kv.lock()
-	defer kv.unlock()
 	if conf.Num == 0 || kv.config.Num == conf.Num {
 		return
 	}
-	kv.able = 0
+	kv.lock()
+	defer kv.unlock()
+	kv.confAble = 0
 	_, is_leader := kv.rf.GetState()
 	if !is_leader {
-		kv.able = 1
 		kv.config = conf
+		kv.confAble = 1
 		return
 	}
 	kv.config = conf
-	kv.able = 1
+	kv.confAble = 1
 	fmt.Printf("[ShardKV-%d-%d] 接收到 [Conf-%d]: shard:%v\n", kv.gid, kv.me, conf.Num, conf.Shards)
 }
 
+// 使用该操作前必须上锁
+func (kv *ShardKV) isAble() bool {
+	return kv.confAble == 1 && kv.applyAble == 1
+}
+
 func (kv *ShardKV) refreshTask() {
-	if atomic.LoadInt32(&kv.able) == 0 {
-		for kv.config.Num != 0 {
-			time.Sleep(200 * time.Millisecond)
+	// 快速读取配置
+	if kv.confAble == 0 {
+		kv.refreshConf()
+		for kv.config.Num == 0 {
+			time.Sleep(50 * time.Millisecond)
 			kv.refreshConf()
 		}
-		atomic.StoreInt32(&kv.able, 1)
+		kv.lock()
+		kv.confAble = 1
+		kv.unlock()
 	}
 	ticker := time.NewTicker(RefreshLap)
 	for !kv.is_killed() {
@@ -231,10 +256,12 @@ func (kv *ShardKV) refreshTask() {
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	for atomic.LoadInt32(&kv.able) == 0 {
-	}
 	kv.lock()
 	defer kv.unlock()
+	if !kv.isAble() {
+		reply.Err = ErrNoAble
+		return
+	}
 	_, _, is_leader := kv.rf.Start(Op{
 		ClientId: args.ClientId,
 		ReqId:    args.ReqId,
@@ -254,19 +281,17 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	kv.lock()
-	fmt.Printf("[ShardKV-%d-%d] GET key=%s, value=%s\ndata=%v\n", kv.gid, kv.me, args.Key, reply.Value, kv.data)
 	kv.handleGet(args.Key, reply)
-	// if reply.Value == "" {
-	// 	fmt.Printf("[ShardKV-%d-%d] WARN: key=%s, value=%s\ndata=%v\n", kv.gid, kv.me, args.Key, reply.Value, kv.data)
-	// }
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	for atomic.LoadInt32(&kv.able) == 0 {
-	}
 	kv.lock()
 	defer kv.unlock()
+	if !kv.isAble() {
+		reply.Err = ErrNoAble
+		return
+	}
 	_, _, is_leader := kv.rf.Start(Op{
 		ClientId: args.ClientId,
 		ReqId:    args.ReqId,
@@ -344,10 +369,13 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.notifyChan = make(map[int64]chan NotifyMsg)
 	kv.clerk = shardctrler.MakeClerk(kv.ctrlers)
 	kv.data = make(map[string]string)
-	kv.able = 0
-	fmt.Printf("创建ShardKV-%d-%d\n", kv.gid, kv.me)
-	go kv.refreshTask()
+	kv.confAble = 0
+	kv.applyAble = 0
+
+	fmt.Printf("[ShardKV-%d-%d] 启动, 需要重放 %d 条日志\n", kv.gid, kv.me, kv.rf.GetCommitIdx())
+
 	go kv.handleApply()
+	go kv.refreshTask()
 
 	return kv
 }
