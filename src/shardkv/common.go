@@ -20,12 +20,14 @@ const (
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoAble      = "ErrNoAble"
+	ErrConfUpdate  = "ErrConfUpdate"
 )
 
 const (
-	Get    = "Get"
-	Put    = "Put"
-	Append = "Append"
+	Get       = "Get"
+	Put       = "Put"
+	Append    = "Append"
+	Transform = "Transform"
 )
 
 type ReqId int64
@@ -58,6 +60,16 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type ServerPutArgs struct {
+	From  int
+	ReqId ReqId
+	Data  map[string]string
+}
+
+type ServerPutReply struct {
+	Err Err
 }
 
 func Dprintf(ft string, a ...interface{}) {

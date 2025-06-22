@@ -41,14 +41,14 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	persister  raft.Persister
-	lastReq    map[int64]ReqId
-	notifyChan map[int64]chan NotifyMsg
-	data       map[string]string
-	clerk      *shardctrler.Clerk
-	config     shardctrler.Config // 或许可以定时请求配置加客户端发送了个请求后发现不是本节点时请求最新config
-	confAble   int32              // 配置是否可用
-	applyAble  int32              // 日志重放是否完成
+	lastReq          map[int64]ReqId
+	notifyChan       map[int64]chan NotifyMsg
+	data             map[string]string
+	clerk            *shardctrler.Clerk
+	config           shardctrler.Config
+	confAble         int32 // 配置是否可用
+	applyAble        int32 // 日志重放是否完成
+	confChangeNorify chan int32
 }
 
 func (kv *ShardKV) lock() {
@@ -106,8 +106,13 @@ func (kv *ShardKV) waitResp(clientId int64) (msg NotifyMsg) {
 }
 
 func (kv *ShardKV) isExchange(clientId int64) bool {
-	_, ok := kv.config.Groups[int(clientId)]
-	return ok
+	for gid := range kv.config.Groups {
+		// TODO 应该不能这样做
+		if clientId == int64(gid) {
+			return true
+		}
+	}
+	return false
 }
 
 func (kv *ShardKV) keyBelongGroups(key string) bool {
@@ -161,7 +166,7 @@ func (kv *ShardKV) handleApply() {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
-				Dprintf("[ShardKV-%d-%d], 正在处理 %v, data:%v\n", kv.gid, kv.me, op, kv.data)
+				fmt.Printf("[ShardKV-%d-%d], 正在处理 %v, data:%v\n", kv.gid, kv.me, op, kv.data)
 				notify_msg.Err = OK
 			case Put:
 				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
@@ -169,8 +174,6 @@ func (kv *ShardKV) handleApply() {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
-				// fmt.Printf("[ShardKV-%d-%d] 当前配置为：%v\n", kv.gid, kv.me, kv.config.Shards)
-				// fmt.Printf("[ShardKV-%d-%d] 正在处理 %v\n", kv.gid, kv.me, op)
 				kv.handlePut(key, value)
 				notify_msg.Err = OK
 			case Append:
@@ -182,6 +185,12 @@ func (kv *ShardKV) handleApply() {
 				// fmt.Printf("[ShardKV-%d-%d] 正在处理 %v\n", kv.gid, kv.me, op)
 				kv.handleAppend(key, value)
 				notify_msg.Err = OK
+			case Transform:
+				data := op.Args.(map[string]string)
+				for k, v := range data {
+					kv.handlePut(k, v)
+				}
+				notify_msg.Err = OK
 			}
 			kv.lock()
 			if ch, ok := kv.notifyChan[op.ClientId]; ok {
@@ -189,8 +198,7 @@ func (kv *ShardKV) handleApply() {
 				if !isLeader {
 					kv.stop_notify(op.ClientId)
 				} else {
-					// fmt.Printf("[ShardKV-%d] 获取到了notify_chan\n", kv.me)
-					ch <- notify_msg // bug: 写不进去
+					ch <- notify_msg
 				}
 			}
 			// 确定重放完成后启动服务
@@ -202,10 +210,55 @@ func (kv *ShardKV) handleApply() {
 					kv.applyAble = 1
 				}
 			}
-			// fmt.Printf("[ShardKV-%d-%d] 处理 %v 完成\n", kv.gid, kv.me, op)
+			fmt.Printf("[ShardKV-%d-%d] 处理 %v 完成\n", kv.gid, kv.me, op)
 			kv.unlock()
 		}
 	}
+}
+
+// 把shard对应的数据发送给server，这个函数可以异步进行
+func (kv *ShardKV) sendPut(servers []string, shard int, notifyChan chan int32) {
+	putData := make(map[string]string)
+	kv.lock()
+	for key, val := range kv.data {
+		if shard == key2shard(key) {
+			putData[key] = val
+		}
+	}
+	kv.unlock()
+
+	args := ServerPutArgs{
+		From:  kv.gid,
+		ReqId: ReqId(nrand()),
+		Data:  putData,
+	}
+	var reply GetReply
+	retry := 0
+	for i := 0; i < len(servers); i++ {
+		srv := kv.make_end(servers[i])
+		ok := srv.Call("ShardKV.ServerTransform", &args, &reply)
+		if ok && reply.Err == OK {
+			notifyChan <- 1 // 通知主线程该goroughting完成
+			return
+		}
+		if ok && (reply.Err == ErrWrongGroup || reply.Err == ErrNoAble) {
+			// 接收到wrongGroup有两种可能
+			// 1. Conf又更新了
+			// 2. 或者是对方的Conf还未更新
+			// 解决方法：尝试多次等待后重发，若多次失败则断定是Conf又更新了，则通知主线程
+			if retry == 5 {
+				notifyChan <- 0
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+			i--
+			retry++
+		}
+		// ... not ok, or ErrWrongLeader继续重试
+	}
+	// 作为保险
+	notifyChan <- 0
+
 }
 
 func (kv *ShardKV) refreshConf() {
@@ -222,9 +275,33 @@ func (kv *ShardKV) refreshConf() {
 		kv.confAble = 1
 		return
 	}
+	// 发送丢失的分片数据
+	// TODO 逻辑应该进行修改，做到能没有变化的分片仍能处理数据
+	oldShards := kv.config.Shards
 	kv.config = conf
+	kv.unlock()
+
+	success := make(chan int32, shardctrler.NShards)
+	needSend := 0
+	for i := 0; i < shardctrler.NShards; i++ {
+		diff := conf.Shards[i] != oldShards[i]
+		if diff && oldShards[i] == kv.gid {
+			servers := conf.Groups[conf.Shards[i]]
+			needSend++
+			go kv.sendPut(servers, i, success)
+		}
+	}
+	// 等待分片数据发送完成
+	for needSend > 0 {
+		select {
+		case <-success:
+			needSend--
+		}
+	}
+
 	kv.confAble = 1
 	fmt.Printf("[ShardKV-%d-%d] 接收到 [Conf-%d]: shard:%v\n", kv.gid, kv.me, conf.Num, conf.Shards)
+	kv.lock()
 }
 
 // 使用该操作前必须上锁
@@ -236,13 +313,6 @@ func (kv *ShardKV) refreshTask() {
 	// 快速读取配置
 	if kv.confAble == 0 {
 		kv.refreshConf()
-		for kv.config.Num == 0 {
-			time.Sleep(50 * time.Millisecond)
-			kv.refreshConf()
-		}
-		kv.lock()
-		kv.confAble = 1
-		kv.unlock()
 	}
 	ticker := time.NewTicker(RefreshLap)
 	for !kv.is_killed() {
@@ -311,6 +381,30 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.lock()
 }
 
+func (kv *ShardKV) ServerTransform(args *ServerPutArgs, reply *ServerPutReply) {
+	kv.lock()
+	defer kv.unlock()
+	if !kv.isAble() {
+		reply.Err = ErrNoAble
+		return
+	}
+	_, _, is_leader := kv.rf.Start(Op{
+		ClientId: int64(args.From),
+		ReqId:    args.ReqId,
+		Args:     args.Data,
+		Method:   Transform,
+	})
+	if !is_leader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.addNotifyNotExist(int64(args.From))
+	kv.unlock()
+	reply.Err = kv.waitResp(int64(args.From)).Err
+	kv.lock()
+	kv.stop_notify(int64(args.From))
+}
+
 // the tester calls Kill() when a ShardKV instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
@@ -351,6 +445,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(map[string]string{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -371,6 +466,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.data = make(map[string]string)
 	kv.confAble = 0
 	kv.applyAble = 0
+	kv.confChangeNorify = make(chan int32)
 
 	fmt.Printf("[ShardKV-%d-%d] 启动, 需要重放 %d 条日志\n", kv.gid, kv.me, kv.rf.GetCommitIdx())
 
