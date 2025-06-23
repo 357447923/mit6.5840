@@ -84,6 +84,7 @@ func (ck *Clerk) Get(key string) string {
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
+			noAbleRetry := 0
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply GetReply
@@ -97,7 +98,13 @@ func (ck *Clerk) Get(key string) string {
 				}
 				if ok && (reply.Err == ErrNoAble) {
 					// fmt.Println("ErrNoAble, 等待重试")
+					if noAbleRetry >= 5 {
+						// 可能是该节点已经不负责任何Shard了
+						// 尝试获取最新的负责该Shard的节点
+						break
+					}
 					si--
+					noAbleRetry++
 					time.Sleep(100 * time.Microsecond)
 				}
 				// ... not ok, or ErrWrongLeader
@@ -124,6 +131,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	for {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
+		noAbleRetry := 0
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
@@ -137,6 +145,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 					break
 				}
 				if ok && reply.Err == ErrNoAble {
+					if noAbleRetry >= 5 {
+						break
+					}
 					si--
 					time.Sleep(100 * time.Millisecond)
 				}

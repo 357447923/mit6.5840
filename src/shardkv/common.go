@@ -65,6 +65,7 @@ type GetReply struct {
 type ServerPutArgs struct {
 	From  int
 	ReqId ReqId
+	Shard int
 	Data  map[string]string
 }
 
