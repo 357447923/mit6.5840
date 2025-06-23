@@ -113,16 +113,6 @@ func (kv *ShardKV) waitResp(clientId int64) (msg NotifyMsg) {
 	return
 }
 
-func (kv *ShardKV) isExchange(clientId int64) bool {
-	for gid := range kv.config.Groups {
-		// TODO 应该不能这样做
-		if clientId == int64(gid) {
-			return true
-		}
-	}
-	return false
-}
-
 func (kv *ShardKV) keyBelongGroups(key string) bool {
 	shard := key2shard(key)
 	return kv.gid == kv.config.Shards[shard]
@@ -140,7 +130,7 @@ func (kv *ShardKV) handleGet(key string, reply *GetReply) {
 func (kv *ShardKV) handlePut(key string, value string) {
 	Dprintf("[ShardKV-%d-%d] before put [%s:%s], cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
 	kv.data[key] = value
-	Dprintf("[ShardKV-%d-%d] put [%s:%s] cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
+	// fmt.Printf("[ShardKV-%d-%d] put [%s:%s] cur data=%v\n", kv.gid, kv.me, key, value, kv.data)
 }
 
 func (kv *ShardKV) handleAppend(key string, value string) {
@@ -149,9 +139,7 @@ func (kv *ShardKV) handleAppend(key string, value string) {
 
 func (kv *ShardKV) handleApply() {
 	if kv.rf.GetCommitIdx() == 0 {
-		kv.lock()
-		kv.applyAble = 1
-		kv.unlock()
+		atomic.StoreInt32(&kv.applyAble, 1)
 	}
 	for !kv.is_killed() {
 		select {
@@ -165,7 +153,7 @@ func (kv *ShardKV) handleApply() {
 				commitIdx := kv.rf.GetCommitIdx()
 				if msg.SnapshotIndex == commitIdx {
 					Dprintf("[ShardKV-%d-%d] 重放完成, data: %v\n", kv.gid, kv.me, kv.data)
-					kv.applyAble = 1
+					atomic.StoreInt32(&kv.applyAble, 1)
 				}
 				continue
 			}
@@ -178,6 +166,7 @@ func (kv *ShardKV) handleApply() {
 				continue
 			}
 			kv.lastReq[op.ClientId] = op.ReqId
+			kv.lock()
 			switch op.Method {
 			case Get:
 				key := op.Args.(string)
@@ -185,7 +174,7 @@ func (kv *ShardKV) handleApply() {
 					notify_msg.Err = ErrWrongGroup
 					break
 				}
-				fmt.Printf("[ShardKV-%d-%d], 正在处理 %v, data:%v\n", kv.gid, kv.me, op, kv.data)
+				// fmt.Printf("[ShardKV-%d-%d], 正在处理 %v, data:%v\n", kv.gid, kv.me, op, kv.data)
 				notify_msg.Err = OK
 			case Put:
 				key, value := op.Args.([]string)[0], op.Args.([]string)[1]
@@ -211,7 +200,7 @@ func (kv *ShardKV) handleApply() {
 				}
 				notify_msg.Err = OK
 			}
-			kv.lock()
+
 			if ch, ok := kv.notifyChan[op.ClientId]; ok {
 				_, isLeader := kv.rf.GetState()
 				if !isLeader {
@@ -220,16 +209,16 @@ func (kv *ShardKV) handleApply() {
 					ch <- notify_msg
 				}
 			}
+			kv.unlock()
 			// 确定重放完成后启动服务
-			if kv.applyAble == 0 {
+			if atomic.LoadInt32(&kv.applyAble) == 0 {
 				Dprintf("[ShardKV-%d-%d] 重放 %v\n", kv.gid, kv.me, op)
 				commitIdx := kv.rf.GetCommitIdx()
 				if msg.CommandIndex == commitIdx {
 					Dprintf("[ShardKV-%d-%d] 重放完成, data: %v\n", kv.gid, kv.me, kv.data)
-					kv.applyAble = 1
+					atomic.StoreInt32(&kv.applyAble, 1)
 				}
 			}
-			kv.unlock()
 			Dprintf("[ShardKV-%d-%d] 处理 %v 完成\n", kv.gid, kv.me, op)
 			kv.saveSnapshot(msg.CommandIndex)
 		}
@@ -245,14 +234,15 @@ func (kv *ShardKV) transformShard(servers []string, shard int, notifyChan chan T
 			putData[key] = val
 		}
 	}
-	kv.unlock()
 
 	args := ServerPutArgs{
-		From:  kv.gid,
-		ReqId: ReqId(nrand()),
-		Shard: shard,
-		Data:  putData,
+		From:      kv.gid,
+		ReqId:     ReqId(nrand()),
+		Shard:     shard,
+		ConfigNum: kv.config.Num,
+		Data:      putData,
 	}
+	kv.unlock()
 	var reply GetReply
 	retry := 0
 	for i := 0; i < len(servers); i++ {
@@ -280,54 +270,57 @@ func (kv *ShardKV) transformShard(servers []string, shard int, notifyChan chan T
 			retry++
 		}
 		// ... not ok, or ErrWrongLeader继续重试
-		fmt.Printf("[ShardKV-%d-%d] 发送 Shard-%d 分片数据到 [ShardKV-%d-%d] 失败, 错误信息: %s\n",
+		Dprintf("[ShardKV-%d-%d] 发送 Shard-%d 分片数据到 [ShardKV-%d-%d] 失败, 错误信息: %s\n",
 			kv.gid, kv.me, shard, kv.config.Shards[shard], i, reply.Err)
 	}
 	// 作为保险
 	notifyChan <- TransformNotify{Ok: false, Shard: shard}
 }
 
+// 使用前上锁
+func (kv *ShardKV) prepareFresh() {
+	kv.putAble = 0
+	for i := 0; i < len(kv.config.Shards); i++ {
+		kv.getAble[i] = 0
+	}
+}
+
 func (kv *ShardKV) refreshConf() {
 	conf := kv.clerk.Query(-1)
-	if conf.Num == 0 || kv.config.Num == conf.Num {
+	if atomic.LoadInt32(&kv.applyAble) == 0 || conf.Num == 0 || kv.config.Num == conf.Num {
 		return
 	}
 
-	atomic.StoreInt32(&kv.putAble, 0)
-	for i := 0; i < shardctrler.NShards; i++ {
-		atomic.StoreInt32(&kv.getAble[i], 0)
-	}
+	// getAble的更新要一气呵成
+	notifies := make(chan TransformNotify, shardctrler.NShards)
+	needSend := 0
 
 	kv.lock()
+	kv.prepareFresh()
+
 	_, is_leader := kv.rf.GetState()
 	if !is_leader {
 		kv.config = conf
-		kv.unlock()
-		atomic.StoreInt32(&kv.putAble, 1)
-		for i := 0; i < shardctrler.NShards; i++ {
+		kv.putAble = 1
+		for i := 0; i < len(conf.Shards); i++ {
 			if conf.Shards[i] == kv.gid {
-				atomic.StoreInt32(&kv.getAble[i], 1)
+				kv.getAble[i] = 1
 			}
 		}
+		kv.unlock()
 		return
 	}
 	fmt.Printf("[ShardKV-%d-%d] 接收到 [Conf-%d]: shard:%v\n", kv.gid, kv.me, conf.Num, conf.Shards)
 	// 发送丢失的分片数据
 	oldShards := kv.config.Shards
-	// 拷贝一份原来的Shard用于做分片转移，然后修改配置
-	// 这样可以做到没有变化的分片和新分配给该节点的分片仍能处理数据
-	// 提高系统整体的吞吐量
 	kv.config = conf
-	kv.unlock()
-	atomic.StoreInt32(&kv.putAble, 1)
+	kv.putAble = 1
 
-	notifies := make(chan TransformNotify, shardctrler.NShards)
-	needSend := 0
 	for i := 0; i < shardctrler.NShards; i++ {
 		diff := conf.Shards[i] != oldShards[i]
 		// 没有变化的Shard可以处理GET请求
 		if (!diff || oldShards[i] == 0) && conf.Shards[i] == kv.gid {
-			atomic.StoreInt32(&kv.getAble[i], 1)
+			kv.getAble[i] = 1
 		}
 		if diff && oldShards[i] == kv.gid {
 			servers := conf.Groups[conf.Shards[i]]
@@ -336,7 +329,9 @@ func (kv *ShardKV) refreshConf() {
 			go kv.transformShard(servers, i, notifies)
 		}
 	}
+	kv.unlock()
 	// 等待分片数据发送完成
+	retry := make([]int, len(conf.Shards))
 	for needSend > 0 {
 		select {
 		case msg := <-notifies:
@@ -344,9 +339,18 @@ func (kv *ShardKV) refreshConf() {
 				needSend--
 				continue
 			}
+			if retry[msg.Shard] >= 5 {
+				fmt.Printf("[ShardKV-%d-%d] Error\n", kv.gid, kv.me)
+			}
+			retry[msg.Shard]++
 			servers := conf.Groups[conf.Shards[msg.Shard]]
-			// 重新发送
-			go kv.transformShard(servers, msg.Shard, notifies)
+			// 重新发送，
+			// TODO 应该设置每个重新发送的最大次数
+			go func(times int) {
+				sleep := 100 * times
+				time.Sleep(time.Duration(sleep) * time.Millisecond)
+				kv.transformShard(servers, msg.Shard, notifies)
+			}(retry[msg.Shard])
 		}
 	}
 	close(notifies)
@@ -415,7 +419,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	kv.lock()
 	defer kv.unlock()
 	// 不可GET
-	if !(atomic.LoadInt32(&kv.getAble[shard]) == 1 && kv.applyAble == 1) {
+	if !(kv.getAble[shard] == 1 && atomic.LoadInt32(&kv.applyAble) == 1) {
 		reply.Err = ErrNoAble
 		fmt.Printf("[ShardKV-%d-%d] getAble=%v\n", kv.gid, kv.me, kv.getAble)
 		return
@@ -447,7 +451,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.lock()
 	defer kv.unlock()
 	// 不可PUT和APPEND
-	if !(atomic.LoadInt32(&kv.putAble) == 1 && kv.applyAble == 1) {
+	if !(kv.putAble == 1 && atomic.LoadInt32(&kv.applyAble) == 1) {
 		reply.Err = ErrNoAble
 		return
 	}
@@ -474,12 +478,13 @@ func (kv *ShardKV) ServerTransform(args *ServerPutArgs, reply *ServerPutReply) {
 	kv.lock()
 	defer kv.unlock()
 	// 是否可以进行Transform
-	if !(atomic.LoadInt32(&kv.putAble) == 1 && kv.applyAble == 1) {
+	if args.ConfigNum > kv.config.Num {
+		kv.prepareFresh()
 		reply.Err = ErrNoAble
 		return
 	}
-	if kv.gid != kv.config.Shards[args.Shard] {
-		reply.Err = ErrWrongGroup
+	if !(kv.putAble == 1 && atomic.LoadInt32(&kv.applyAble) == 1) {
+		reply.Err = ErrNoAble
 		return
 	}
 	_, _, is_leader := kv.rf.Start(Op{

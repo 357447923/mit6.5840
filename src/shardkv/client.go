@@ -98,7 +98,7 @@ func (ck *Clerk) Get(key string) string {
 				}
 				if ok && (reply.Err == ErrNoAble) {
 					// fmt.Println("ErrNoAble, 等待重试")
-					if noAbleRetry >= 5 {
+					if noAbleRetry >= 3 {
 						// 可能是该节点已经不负责任何Shard了
 						// 尝试获取最新的负责该Shard的节点
 						break
@@ -114,8 +114,6 @@ func (ck *Clerk) Get(key string) string {
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
-
-	return ""
 }
 
 // shared by Put and Append.

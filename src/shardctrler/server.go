@@ -351,7 +351,7 @@ func (sc *ShardCtrler) handleJoin(args *JoinArgs) {
 	}
 	conf.Groups = groups
 	// 深拷贝完成
-	DPrintf("[ShardCtrler-%d] 通过Join操作生成 [config-%d]\n", sc.me, conf.Num)
+	fmt.Printf("[ShardCtrler-%d] 通过Join操作生成 [config-%d]\n", sc.me, conf.Num)
 	for k, v := range args.Servers {
 		conf.Groups[k] = v
 	}

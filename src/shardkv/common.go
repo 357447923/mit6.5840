@@ -63,10 +63,11 @@ type GetReply struct {
 }
 
 type ServerPutArgs struct {
-	From  int
-	ReqId ReqId
-	Shard int
-	Data  map[string]string
+	From      int
+	ReqId     ReqId
+	Shard     int
+	ConfigNum int
+	Data      map[string]string
 }
 
 type ServerPutReply struct {
