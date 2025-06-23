@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,7 @@ type ShardKV struct {
 	gid          int
 	ctrlers      []*labrpc.ClientEnd
 	maxraftstate int // snapshot if log grows this big
+	persister    *raft.Persister
 
 	// Your definitions here.
 	lastReq          map[int64]ReqId
@@ -149,8 +151,19 @@ func (kv *ShardKV) handleApply() {
 		select {
 		case msg := <-kv.applyCh:
 			if !msg.CommandValid {
+				if !msg.SnapshotValid {
+					continue
+				}
+				// 处理Snapshot
+				kv.loadSnapshot(msg.Snapshot)
+				commitIdx := kv.rf.GetCommitIdx()
+				if msg.SnapshotIndex == commitIdx {
+					Dprintf("[ShardKV-%d-%d] 重放完成, data: %v\n", kv.gid, kv.me, kv.data)
+					kv.applyAble = 1
+				}
 				continue
 			}
+			// 处理Command
 			op := msg.Command.(Op)
 			var notify_msg NotifyMsg
 
@@ -210,8 +223,9 @@ func (kv *ShardKV) handleApply() {
 					kv.applyAble = 1
 				}
 			}
-			fmt.Printf("[ShardKV-%d-%d] 处理 %v 完成\n", kv.gid, kv.me, op)
 			kv.unlock()
+			fmt.Printf("[ShardKV-%d-%d] 处理 %v 完成\n", kv.gid, kv.me, op)
+			kv.saveSnapshot(msg.CommandIndex)
 		}
 	}
 }
@@ -276,9 +290,12 @@ func (kv *ShardKV) refreshConf() {
 		return
 	}
 	// 发送丢失的分片数据
-	// TODO 逻辑应该进行修改，做到能没有变化的分片仍能处理数据
 	oldShards := kv.config.Shards
+	// 拷贝一份原来的Shard用于做分片转移，然后修改配置
+	// 这样可以做到没有变化的分片和新分配给该节点的分片仍能处理数据
+	// 提高系统整体的吞吐量
 	kv.config = conf
+	kv.confAble = 1
 	kv.unlock()
 
 	success := make(chan int32, shardctrler.NShards)
@@ -288,6 +305,7 @@ func (kv *ShardKV) refreshConf() {
 		if diff && oldShards[i] == kv.gid {
 			servers := conf.Groups[conf.Shards[i]]
 			needSend++
+			// 分片数据转移
 			go kv.sendPut(servers, i, success)
 		}
 	}
@@ -299,7 +317,6 @@ func (kv *ShardKV) refreshConf() {
 		}
 	}
 
-	kv.confAble = 1
 	fmt.Printf("[ShardKV-%d-%d] 接收到 [Conf-%d]: shard:%v\n", kv.gid, kv.me, conf.Num, conf.Shards)
 	kv.lock()
 }
@@ -322,6 +339,49 @@ func (kv *ShardKV) refreshTask() {
 		}
 	}
 	ticker.Stop()
+}
+func (kv *ShardKV) saveSnapshot(logIdx int) {
+	if kv.maxraftstate == -1 || kv.maxraftstate >= kv.persister.RaftStateSize() {
+		return
+	}
+	size := kv.persister.RaftStateSize()
+	start := time.Now().UnixMilli()
+	data := kv.genSnapshotData()
+	kv.rf.Snapshot(logIdx, data)
+	Dprintf("[ShardKV-%d-%d] save snapshot success. o'size=%d c'size=%d cost=%v\n", kv.gid, kv.me, size, kv.persister.RaftStateSize(), time.Now().UnixMilli()-start)
+}
+
+func (kv *ShardKV) genSnapshotData() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	err := e.Encode(kv.data)
+	if err != nil {
+		panic(err)
+	}
+	err = e.Encode(kv.lastReq)
+	if err != nil {
+		panic(err)
+	}
+	return w.Bytes()
+}
+
+func (kv *ShardKV) loadSnapshot(snapshot []byte) {
+	w := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(w)
+	var data map[string]string
+	err := d.Decode(&data)
+	if err != nil {
+		panic(err)
+	}
+	var lastReq map[int64]ReqId
+	err = d.Decode(&lastReq)
+	if err != nil {
+		panic(err)
+	}
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	kv.data = data
+	kv.lastReq = lastReq
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
@@ -450,6 +510,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv := new(ShardKV)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.persister = persister
 	kv.make_end = make_end
 	kv.gid = gid
 	kv.ctrlers = ctrlers

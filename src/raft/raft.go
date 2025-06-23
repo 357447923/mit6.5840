@@ -312,6 +312,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	}
 	snapshotLastIndexInLog := rf.GenLogIdx(index)
 	msg := rf.log[snapshotLastIndexInLog]
+	rf.persister.RaftStateSize()
 	rf.snapshot[0].SnapshotValid = true
 	rf.snapshot[0].SnapshotIndex = index
 	rf.snapshot[0].SnapshotTerm = msg.ReceiveTerm
