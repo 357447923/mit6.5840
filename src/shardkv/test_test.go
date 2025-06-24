@@ -1,15 +1,18 @@
 package shardkv
 
-import "6.5840/porcupine"
-import "6.5840/models"
-import "testing"
-import "strconv"
-import "time"
-import "fmt"
-import "sync/atomic"
-import "sync"
-import "math/rand"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.5840/models"
+	"6.5840/porcupine"
+)
 
 const linearizabilityCheckTimeout = 1 * time.Second
 
@@ -146,6 +149,7 @@ func TestJoinLeave(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 }
 
+// 存在一些Shard没有迁移的问题
 func TestSnapshot(t *testing.T) {
 	fmt.Printf("Test: snapshots, join, and leave ...\n")
 

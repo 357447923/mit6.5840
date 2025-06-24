@@ -10,6 +10,7 @@ package shardkv
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -90,6 +91,9 @@ func (ck *Clerk) Get(key string) string {
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					if reply.Value == "" {
+						fmt.Printf("client从[%s]获得数据：%s\n", servers[si], reply.Value)
+					}
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
@@ -97,7 +101,7 @@ func (ck *Clerk) Get(key string) string {
 					break
 				}
 				if ok && (reply.Err == ErrNoAble) {
-					// fmt.Println("ErrNoAble, 等待重试")
+					// fmt.Printf("Get(%v) ErrNoAble, 等待重试\n", args.Key)
 					if noAbleRetry >= 3 {
 						// 可能是该节点已经不负责任何Shard了
 						// 尝试获取最新的负责该Shard的节点

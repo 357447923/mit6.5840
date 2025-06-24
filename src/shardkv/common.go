@@ -20,14 +20,17 @@ const (
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoAble      = "ErrNoAble"
+	ErrUnReady     = "ErrUnReady"
 	ErrConfUpdate  = "ErrConfUpdate"
 )
 
 const (
-	Get       = "Get"
-	Put       = "Put"
-	Append    = "Append"
-	Transform = "Transform"
+	Get           = "Get"
+	Put           = "Put"
+	Append        = "Append"
+	Transform     = "Transform"
+	Update        = "Update"
+	PrepareUpdate = "PrepareUpdate"
 )
 
 type ReqId int64
@@ -68,6 +71,11 @@ type ServerPutArgs struct {
 	Shard     int
 	ConfigNum int
 	Data      map[string]string
+}
+
+type TransformData struct {
+	Shard int
+	Data  map[string]string
 }
 
 type ServerPutReply struct {
